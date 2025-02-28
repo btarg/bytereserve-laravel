@@ -63,8 +63,7 @@ export default defineConfig({
                     includeAbsolute: false,
                 },
             },
-        }),
-        workerDevPlugin(),
+        })
     ],
     build: {
         manifest: true,

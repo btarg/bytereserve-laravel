@@ -1,6 +1,5 @@
-﻿import axios from 'axios';
-import { WorkerPoolManager } from './WorkerPoolManager';
-import { route } from '../../vendor/tightenco/ziggy/src/js';
+﻿import { WorkerPoolManager } from '../WorkerPoolManager';
+import { route } from '../../../vendor/tightenco/ziggy/src/js';
 
 const KEY_LENGTH = 256;
 const CHUNK_SIZE_MB = 16;
@@ -63,7 +62,7 @@ export class S3UploadService {
         password: string,
         folderId?: number | null,
         progressCallback?: (progress: number) => void,
-        should_encrypt: boolean = true
+        should_encrypt: boolean = false
     ): Promise<any> {
         try {
             console.log(`Starting ${should_encrypt ? "encrypted upload" : "non-encrypted upload"} at folder ${folderId} for ${file.name} (${file.size} bytes)`);
@@ -98,15 +97,15 @@ export class S3UploadService {
                 folder_id: folderId,
             });
 
-            const saveFileResponse = await axios.post('/api/files', {
+            const saveFileResponse = await window.cacheFetch.post('/api/files', {
                 name: file.name,
                 path: path, // Use the S3 key as the path
                 mime_type: file.type || 'application/octet-stream',
                 size: file.size,
                 folder_id: folderId,
             });
-
-            return saveFileResponse.data;
+            const data = await saveFileResponse.json();
+            return data;
         } catch (error) {
             console.error('Upload failed:', error);
             throw error;
@@ -117,14 +116,15 @@ export class S3UploadService {
         console.log(`Starting direct upload for ${file.name} (${file.size} bytes)`);
 
         try {
-            const response = await axios.post('/api/uploads/direct-url', {
+            const response = await window.cacheFetch.post(route('uploads.get-direct-url'), {
                 file_name: file.name,
                 content_type: file.type || 'application/octet-stream',
                 folder_id: folderId
             });
 
             // the URL is the presigned S3 upload URL
-            const { url, key } = response.data;
+            const responseData = await response.json();
+            const { url, key } = responseData;
 
             // Process the file (encrypt if needed)
             const processedData = await (async () => {
@@ -184,8 +184,9 @@ export class S3UploadService {
                 throw new Error(`Failed to upload file: ${uploadResponse.statusText}`);
             }
 
-            const detailsResponse = await axios.post('/api/uploads/details', { key });
-            return { ...detailsResponse.data, key };
+            const detailsResponse = await window.cacheFetch.post('/api/uploads/details', { key });
+            const detailsData = await detailsResponse.json();
+            return { ...detailsData, key };
         } catch (error) {
             console.error('Direct upload failed:', error);
             throw error;
@@ -246,7 +247,7 @@ export class S3UploadService {
             );
 
             const initStart = performance.now();
-            const initResponse = await axios.post(route("uploads.initiate-multipart"), {
+            const initResponse = await window.cacheFetch.post(route("uploads.initiate-multipart"), {
                 file_name: file.name,
                 content_type: file.type || 'text/plain',
                 folder_id: folderId
@@ -255,8 +256,10 @@ export class S3UploadService {
             metrics.initTime = performance.now() - initStart;
             console.log(`Upload initialization took ${metrics.initTime.toFixed(2)}ms`);
 
-            uploadId = initResponse.data.uploadId;
-            key = initResponse.data.key;
+            const initData = await initResponse.json();
+
+            uploadId = initData.uploadId;
+            key = initData.key;
 
             if (!uploadId || !key) {
                 throw new Error('No upload ID or key received');
@@ -264,7 +267,7 @@ export class S3UploadService {
 
             const urlStart = performance.now();
             const partNumbers = Array.from({ length: totalChunks }, (_, i) => i + 1);
-            const bulkUrlResponse = await axios.post(route('uploads.get-part-url'), {
+            const bulkUrlResponse = await window.cacheFetch.post(route('uploads.get-part-url'), {
                 uploadId,
                 key,
                 partNumbers,
@@ -272,7 +275,8 @@ export class S3UploadService {
             const urlTime = performance.now() - urlStart;
             console.log(`Getting ${totalChunks} presigned URLs took ${urlTime.toFixed(2)}ms`);
 
-            const partUrls = bulkUrlResponse.data.urls;
+            const bulkData = await bulkUrlResponse.json();
+            const partUrls = bulkData.urls;
 
             let salt: Uint8Array | null = null;
             if (should_encrypt) {
@@ -479,23 +483,24 @@ export class S3UploadService {
             console.log('All parts uploaded, completing multipart upload...');
 
             const completeStart = performance.now();
-            const completeResponse = await axios.post(route("uploads.complete-multipart"), {
+            const completeResponse = await window.cacheFetch.post(route("uploads.complete-multipart"), {
                 uploadId,
                 key,
                 parts: sortedParts,
             });
-
+            const data = await completeResponse.json();
             const result = {
-                ...completeResponse.data,
+                ...data,
                 key: key // this is the s3 key, aka the path
             };
 
             metrics.completeTime = performance.now() - completeStart;
 
-            if (!completeResponse.data.location) {
-                const detailsResponse = await axios.post('/api/uploads/details', { key });
-                if (detailsResponse.data.url) {
-                    completeResponse.data.location = detailsResponse.data.url;
+            if (!data.location) {
+                const detailsResponse = await window.cacheFetch.post(route('uploads.details'), { key });
+                const detailsData = await detailsResponse.json();
+                if (detailsData.url) {
+                    data.location = detailsData.url;
                 } else {
                     throw new Error('No URL returned from S3 complete endpoint');
                 }
@@ -550,7 +555,7 @@ export class S3UploadService {
 
             if (uploadId && key) {
                 try {
-                    await axios.post(route('uploads.abort-multipart'), {
+                    await window.cacheFetch.post(route('uploads.abort-multipart'), {
                         uploadId,
                         key,
                     });

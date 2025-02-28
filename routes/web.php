@@ -62,16 +62,17 @@ Route::prefix('api/uploads')->group(function () {
         ->name('uploads.complete-multipart');
     Route::post('/multipart/abort', [S3UploadController::class, 'abortMultipartUpload'])
         ->name('uploads.abort-multipart');
-    Route::post('/details', [S3UploadController::class, 'getFileDetails']);
+    Route::post('/details', [S3UploadController::class, 'getFileDetails'])
+        ->name('uploads.details');
 });
 
 Route::prefix('api')->middleware('auth')->group(function () {
     Route::get('/explorer', [FileExplorerController::class, 'index'])->name('explorer.index');
     Route::post('/files', [FileExplorerController::class, 'storeFile'])->name('files.store');
     Route::post('/folders', [FileExplorerController::class, 'storeFolder'])->name('folders.store');
-    Route::get('/files/{file}/download', [FileExplorerController::class, 'download'])->name('files.download');
-    Route::delete('/files/{file}', [FileExplorerController::class, 'destroyFile'])->name('files.destroy');
-    Route::delete('/folders/{folder}', [FileExplorerController::class, 'destroyFolder'])->name('folders.destroy');
+    Route::get('/files/{file}/download', [FileExplorerController::class, 'download'])->name('files.download.{file}');
+    Route::delete('/files/{file}', [FileExplorerController::class, 'destroyFile'])->name('files.destroy.{file}');
+    Route::delete('/folders/{folder}', [FileExplorerController::class, 'destroyFolder'])->name('folders.destroy.{folder}');
 });
 
 require __DIR__.'/auth.php';

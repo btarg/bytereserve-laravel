@@ -2,45 +2,21 @@
 
 namespace App\Http\Controllers;
 
+use App\Traits\S3Capable;
 use Illuminate\Http\Request;
-use Aws\S3\S3Client;
 use Throwable;
 use Illuminate\Support\Facades\Log;
 
 class S3UploadController extends Controller
 {
+    use S3Capable;
+
     protected $client;
     protected $bucket;
 
-    public function __construct()
-    {
-        // Ensure endpoint has proper protocol prefix
-        $endpoint = env('AWS_ENDPOINT');
-        if ($endpoint && !preg_match('/^https?:\/\//', $endpoint)) {
-            $endpoint = 'https://' . $endpoint;
-        }
-
-        // Initialize S3 client with correct Backblaze B2 configuration
-        $this->client = new S3Client([
-            'endpoint' => $endpoint,
-            'version' => 'latest',
-            'region'  => env('AWS_REGION'),
-            'credentials' => [
-                'key'    => env('AWS_ACCESS_KEY_ID'),
-                'secret' => env('AWS_SECRET_ACCESS_KEY'),
-            ],
-            'use_path_style_endpoint' => true,
-            'signature_version' => 'v4',
-        ]);
-        $this->bucket = env('AWS_BUCKET');
-
-        // Log S3 Details
-        Log::info('S3 Client Initialized', [
-            'bucket' => $this->bucket,
-            'region' => env('AWS_REGION'),
-            'endpoint' => $endpoint,
-            'key_length' => strlen(env('AWS_ACCESS_KEY_ID')), // Log key length to debug
-        ]);
+    public function __construct() {
+        $this->client = $this->getS3Client();
+        $this->bucket = $this->getS3Bucket();
     }
 
     /**

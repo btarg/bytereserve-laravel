@@ -9,9 +9,10 @@ import {
     ArrowDownTrayIcon
 } from '@heroicons/vue/24/outline';
 
-import axios from "axios";
-import { S3UploadService } from "@/S3UploadService.ts";
+import { S3UploadService } from "@/util/S3UploadService";
 import { useToast } from "vue-toastification";
+import { CacheableFetch } from '@/util/CacheableFetch';
+import { route } from '../../../../vendor/tightenco/ziggy/src/js';
 
 const toast = useToast();
 const props = defineProps<{
@@ -35,10 +36,30 @@ const uploadService = new S3UploadService();
 const uploadProgress = ref<Record<string, number>>({});
 const uploadsInProgress = ref<number>(0);
 
-const refreshFiles = () => {
+const clearExplorerCaches = async () => {
+    try {
+        window.cacheFetch.clearCaches();
+    } catch (error) {
+        console.error('Error clearing explorer caches:', error);
+    }
+}
+
+const refreshFiles = async () => {
+    console.log("Refreshing files");
     selectedItems.value = [];
     emit('selection-change', []);
-    fetchItems();
+    
+    try {
+        // Clear all explorer caches to ensure we get fresh data
+        await clearExplorerCaches();
+        console.log('Explorer caches cleared');
+        
+        // Then fetch with network-only to ensure fresh data
+        await fetchItems();
+    } catch (error) {
+        console.error('Error refreshing files:', error);
+        toast.error("Failed to refresh files");
+    }
 };
 
 defineExpose({
@@ -74,12 +95,15 @@ const downloadFile = async (item: FileItem) => {
     try {
         downloading.value[item.id] = true;
 
-        const response = await axios.get(`/api/files/${item.id}/download`);
+        const response = await window.cacheFetch.get(route('files.download.{file}', { file: item.id }));
+        const data = await response.json();
+        console.log(data);
 
-        if (response.data.download_url) {
+
+        if (data.download_url) {
             // Create a temporary link and click it
             const link = document.createElement('a');
-            link.href = response.data.download_url;
+            link.href = data.download_url;
             link.setAttribute('download', item.name);
             document.body.appendChild(link);
             link.click();
@@ -100,12 +124,17 @@ const downloadFile = async (item: FileItem) => {
 const fetchItems = async () => {
     isLoading.value = true;
     try {
-        // Get the current folder path from props
-        const response = await axios.get('/api/explorer', {
-            params: { path: props.currentPath }
-        });
+        const response = await window.cacheFetch.get(
+            // Convert the route to a URL with query parameters
+            route('explorer.index') + '?' + new URLSearchParams({
+                path: props.currentPath
+            }).toString(),
+        );
 
-        files.value = response.data.items.map(item => {
+        const data = await response.json();
+
+
+        files.value = data.items.map(item => {
             // For folders, create the correct path
             let itemPath = '';
             if (item.type === 'folder') {
@@ -127,7 +156,7 @@ const fetchItems = async () => {
             };
         });
 
-        currentFolderId.value = response.data.current_folder_id;
+        currentFolderId.value = data.current_folder_id;
 
         // Update the browser URL
         updateBrowserURL(props.currentPath);
@@ -200,27 +229,6 @@ const handleDragLeave = (event: DragEvent) => {
     }
 };
 
-const handleDrop = async (event: DragEvent) => {
-    event.preventDefault();
-    isDragging.value = false;
-
-    const droppedFiles = event.dataTransfer?.files;
-    if (!droppedFiles?.length) return;
-
-    uploadsInProgress.value = droppedFiles.length;
-
-    // Process files concurrently but limit the number to avoid overwhelming the browser
-    const filesToProcess = Array.from(droppedFiles);
-    const batchSize = 5; // Process 5 files at a time
-
-    for (let i = 0; i < filesToProcess.length; i += batchSize) {
-        const batch = filesToProcess.slice(i, i + batchSize);
-        await Promise.all(batch.map(file => processFile(file)));
-    }
-
-    // Refresh file list after uploads complete
-    fetchItems();
-};
 
 async function processFile(file: File) {
     try {
@@ -242,6 +250,8 @@ async function processFile(file: File) {
         uploadsInProgress.value--;
         console.log(`Upload completed: ${result.name} (${formatFileSize(file.size)}) in ${duration.toFixed(2)}s`);
         toast.success(`Uploaded ${file.name} in ${duration.toFixed(2)}s`);
+        
+        // Don't call refreshFiles() inside the loop - we'll refresh once at the end
         return result;
     } catch (error) {
         uploadsInProgress.value--;
@@ -250,6 +260,32 @@ async function processFile(file: File) {
         return null;
     }
 }
+
+
+const handleDrop = async (event: DragEvent) => {
+    event.preventDefault();
+    isDragging.value = false;
+
+    const droppedFiles = event.dataTransfer?.files;
+    if (!droppedFiles?.length) return;
+
+    uploadsInProgress.value = droppedFiles.length;
+
+    // Process files concurrently but limit the number
+    const filesToProcess = Array.from(droppedFiles);
+    const batchSize = 5;
+    
+    try {
+        // Process files in batches
+        for (let i = 0; i < filesToProcess.length; i += batchSize) {
+            const batch = filesToProcess.slice(i, i + batchSize);
+            await Promise.all(batch.map(file => processFile(file)));
+        }
+    } finally {
+        // IMPORTANT: Refresh files once after all uploads complete
+        await refreshFiles();
+    }
+};
 
 watch(() => props.currentPath, () => {
     selectedItems.value = [];

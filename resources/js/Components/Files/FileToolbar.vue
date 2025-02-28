@@ -1,7 +1,6 @@
 ﻿<!-- filepath: /c:/Users/BenTa/Documents/Laravel/chirper/resources/js/Components/Files/FileToolbar.vue -->
 <script setup lang="ts">
 import { ref } from 'vue';
-import axios from 'axios';
 import {
     ArrowDownTrayIcon,
     TrashIcon,
@@ -9,6 +8,7 @@ import {
     FolderPlusIcon
 } from '@heroicons/vue/24/outline';
 import { FileItem } from '../../types';
+import { route } from '../../../../vendor/tightenco/ziggy/src/js';
 
 const props = defineProps<{
     selectedItems: FileItem[];
@@ -28,7 +28,7 @@ const createNewFolder = async () => {
     if (!newFolderName.value.trim()) return;
 
     try {
-        await axios.post('/api/folders', {
+        await window.cacheFetch.post('/api/folders', {
             name: newFolderName.value,
             parent_path: props.currentPath
         });
@@ -50,11 +50,12 @@ const downloadSelectedFile = async () => {
     downloading.value = true;
 
     try {
-        const response = await axios.get(`/api/files/${file.id}/download`);
+        const response = await window.cacheFetch.get(route('files.download.' + file.id));
+        const data = await response.json();
 
-        if (response.data.download_url) {
+        if (data.download_url) {
             const link = document.createElement('a');
-            link.href = response.data.download_url;
+            link.href = data.download_url;
             link.setAttribute('download', file.name);
             document.body.appendChild(link);
             link.click();
@@ -77,12 +78,13 @@ const deleteSelectedItems = async () => {
     try {
         for (const item of props.selectedItems) {
             if (item.type === 'file') {
-                await axios.delete(`/api/files/${item.id}`);
+                await window.cacheFetch.delete(route('files.destroy.{file}', { file: item.id }));
             } else {
-                await axios.delete(`/api/folders/${item.id}`);
+                await window.cacheFetch.delete(route('folders.destroy.{folder}', { folder: item.id }));
             }
         }
 
+        // Explicitly emit the refresh event
         emit('refresh-files');
     } catch (error) {
         console.error('Failed to delete items:', error);
