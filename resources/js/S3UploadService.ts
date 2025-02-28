@@ -63,20 +63,22 @@ export class S3UploadService {
         password: string,
         folderId?: number | null,
         progressCallback?: (progress: number) => void,
+        should_encrypt: boolean = true
     ): Promise<any> {
         try {
-            console.log(`Starting upload at folder ${folderId} for ${file.name} (${file.size} bytes)`);
+            console.log(`Starting ${should_encrypt ? "encrypted upload" : "non-encrypted upload"} at folder ${folderId} for ${file.name} (${file.size} bytes)`);
 
 
             let uploadResult;
             if (file.size < this.CHUNK_SIZE) {
-                uploadResult = await this.directUpload(file, password, folderId);
+                uploadResult = await this.directUpload(file, password, folderId, should_encrypt);
             } else {
                 uploadResult = await this.pipelinedMultipartUpload(
                     file,
                     password,
                     progressCallback,
-                    folderId
+                    folderId,
+                    should_encrypt
                 );
             }
 
@@ -111,7 +113,7 @@ export class S3UploadService {
         }
     }
 
-    private async directUpload(file: File, password: string, folderId?: number | null, should_encrypt: boolean = true): Promise<any> {
+    private async directUpload(file: File, password: string, folderId?: number | null, should_encrypt?: boolean): Promise<any> {
         console.log(`Starting direct upload for ${file.name} (${file.size} bytes)`);
 
         try {
@@ -195,7 +197,7 @@ export class S3UploadService {
         password: string,
         progressCallback?: (progress: number) => void,
         folderId?: number | null,
-        should_encrypt: boolean = true
+        should_encrypt?: boolean
     ): Promise<any> {
         const totalStart = performance.now();
         const totalChunks = Math.ceil(file.size / this.CHUNK_SIZE);
@@ -576,10 +578,6 @@ export class S3UploadService {
         chunk: Blob | ArrayBuffer;
         error?: string;
     }> {
-        if (chunkSize < 1024 * 1024) {
-            return { chunk: file.slice(offset, offset + chunkSize) };
-        }
-
         try {
             // console.log(`Processing chunk at offset ${offset} (${chunkSize} bytes)`);
             const result = await this.workerPool.runTask({

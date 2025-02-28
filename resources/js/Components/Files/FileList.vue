@@ -227,13 +227,21 @@ async function processFile(file: File) {
         // Initialize progress tracking
         const fileId = `${file.name}-${file.size}-${Date.now()}`;
         uploadProgress.value[fileId] = 0;
-
+        
+        // Start timing the upload
+        const startTime = performance.now();
+        
         const result = await uploadService.uploadFile(file, "password", currentFolderId.value, (progress) => {
             uploadProgress.value[fileId] = progress;
         });
-
+        
+        // Calculate upload duration
+        const endTime = performance.now();
+        const duration = (endTime - startTime) / 1000; // Convert to seconds
+        
         uploadsInProgress.value--;
-        console.log('Upload completed:', result);
+        console.log(`Upload completed: ${result.name} (${formatFileSize(file.size)}) in ${duration.toFixed(2)}s`);
+        toast.success(`Uploaded ${file.name} in ${duration.toFixed(2)}s`);
         return result;
     } catch (error) {
         uploadsInProgress.value--;
