@@ -18,6 +18,7 @@ export class AutoCacheableFetch {
         defaultCacheName: string = "default"
     ) {
 
+        // Set up default cache names with versioning
         this.cacheNames = {
             default: `default-cache-v${cacheVersion}`,
             ...Object.fromEntries(
@@ -87,36 +88,27 @@ export class AutoCacheableFetch {
 
     /**
      * Derives a cache name from a URL
-     * @param url The URL to derive a cache name from
-     * @returns A cache name based on the URL
+     * @param url The URL string
+     * @returns A simplified cache name based on the URL
      */
     private deriveCacheNameFromUrl(url: string): string {
         try {
-            // Parse the URL
-            const parsedUrl = new URL(url, window.location.origin);
-
-            // Get the pathname without leading/trailing slashes
-            const path = parsedUrl.pathname.replace(/^\/|\/$/g, "");
-
-            // Replace remaining slashes with dashes
-            const cacheName = path.replace(/\//g, "-") || "root";
-
-            // Limit the length to avoid excessively long cache names
+            // Parse URL and get pathname
+            const pathname = new URL(url, window.location.origin).pathname;
+            
+            // Clean up the pathname to create cache name
+            let cacheName = pathname.replace(/^\/|\/$/g, "").replace(/\//g, "-") || "root";
+            
+            // Limit length
             return cacheName.length > 50 ? cacheName.substring(0, 50) : cacheName;
         } catch (e) {
-            // If URL parsing fails, use a fallback approach
-            // Remove protocol and domain if present
-            const simplifiedUrl = url.replace(/^(https?:\/\/)?([^\/]+)/, "");
-
-            // Clean up the URL to make it suitable as a cache name
-            const cacheName =
-                simplifiedUrl
-                    .replace(/^\/|\/$/g, "") // Remove leading/trailing slashes
-                    .replace(/\//g, "-") // Replace remaining slashes with dashes
-                    .replace(/[?&=]/g, "-") // Replace query string characters
-                    .replace(/-+/g, "-") // Replace multiple dashes with a single dash
-                || "root";
-
+            // Fallback if URL parsing fails
+            const strippedUrl = url.replace(/^(https?:\/\/)?([^\/]+)/, "");
+            let cacheName = strippedUrl
+                .replace(/^\/|\/$/g, "")
+                .replace(/[\/\?\&\=]+/g, "-")
+                .replace(/-+/g, "-") || "root";
+                
             return cacheName.length > 50 ? cacheName.substring(0, 50) : cacheName;
         }
     }
