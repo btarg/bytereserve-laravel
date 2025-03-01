@@ -33,10 +33,11 @@ export class S3UploadService {
     private readonly MAX_CONCURRENT_UPLOADS: number;
     private readonly MAX_PREFETCH_CHUNKS = 2;
     private readonly workerPool: WorkerPoolManager;
+    private readonly workerCount: number;
 
     constructor() {
         const cores = navigator.hardwareConcurrency || 4;
-        const workerCount = Math.min(cores, 8);
+        this.workerCount = Math.min(cores, 8);
 
         const connectionType = (navigator as any).connection?.type;
         const isSlowConnection =
@@ -47,13 +48,9 @@ export class S3UploadService {
         this.MAX_CONCURRENT_UPLOADS = isSlowConnection
             ? 4
             : Math.min(cores * 2, 16);
-
-        console.log(
-            `Using ${workerCount} workers with ${this.MAX_CONCURRENT_UPLOADS} concurrent uploads`,
-        );
         this.workerPool = new WorkerPoolManager(
             '/build/js/workers/file-processor.js',
-            workerCount,
+            this.workerCount,
         );
     }
 
@@ -66,7 +63,7 @@ export class S3UploadService {
     ): Promise<any> {
         try {
             console.log(`Starting ${should_encrypt ? "encrypted upload" : "non-encrypted upload"} at folder ${folderId} for ${file.name} (${file.size} bytes)`);
-
+            console.log(`Using ${this.workerCount} workers with ${this.MAX_CONCURRENT_UPLOADS} concurrent uploads`,)
 
             let uploadResult;
             if (file.size < this.CHUNK_SIZE) {

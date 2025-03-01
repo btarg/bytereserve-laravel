@@ -26,7 +26,6 @@ const emit = defineEmits<{
 
 const isDragging = ref(false);
 const isLoading = ref(false);
-const workers = new Map<string, Worker>();
 const selectedItems = ref<FileItem[]>([]);
 const files = ref<FileItem[]>([]);
 const currentFolderId = ref<number | null>(null);
