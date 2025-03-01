@@ -11,7 +11,6 @@ import {
 
 import { S3UploadService } from "@/util/S3UploadService";
 import { useToast } from "vue-toastification";
-import { CacheableFetch } from '@/util/CacheableFetch';
 import { route } from '../../../../vendor/tightenco/ziggy/src/js';
 
 const toast = useToast();

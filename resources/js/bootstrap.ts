@@ -1,9 +1,8 @@
-import cacheFetchInstance from "./util/AutoCacheableFetch";
-import { CacheableFetch } from "./util/CacheableFetch";
+import cacheFetchInstance, { AutoCacheableFetch } from "./util/AutoCacheableFetch";
 
 declare global {
     interface Window {
-        cacheFetch: CacheableFetch;
+        cacheFetch: AutoCacheableFetch;
     }
 }
 
