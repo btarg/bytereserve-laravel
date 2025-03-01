@@ -1,4 +1,4 @@
-﻿import { WorkerPoolManager } from '../WorkerPoolManager';
+﻿import { WorkerPoolManager } from './WorkerPoolManager';
 import { route } from '../../../vendor/tightenco/ziggy/src/js';
 
 const KEY_LENGTH = 256;
