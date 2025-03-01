@@ -1,10 +1,7 @@
 <?php
 namespace App\Http\Controllers\Auth;
 use App\Http\Controllers\Controller;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Http\Request;
 use Laravel\Socialite\Facades\Socialite;
-use \App\Models\User;
 
 class SolveProviderConflictController extends Controller
 {
@@ -21,10 +18,12 @@ class SolveProviderConflictController extends Controller
                 ->with('error', 'Invalid or expired provider link request');
         }
 
-        return Socialite::driver($conflictData['originalProvider'])
-            ->stateless()
-            ->redirect();
-
+        // The key fix: Return a DIRECT redirect response, not an Inertia response
+        // This prevents Inertia from trying to handle it as an XHR request
+        $redirectUrl = Socialite::driver($conflictData['originalProvider'])->redirect()->getTargetUrl();
+        
+        // Return a plain HTTP redirect to the OAuth provider
+        return redirect()->away($redirectUrl);
     }
 
     public function cancelConflictResolution()
@@ -33,6 +32,4 @@ class SolveProviderConflictController extends Controller
         return redirect()->route('login')
             ->with('status', 'Conflict resolution cancelled');
     }
-    
-    
 }

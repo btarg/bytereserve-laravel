@@ -10,7 +10,6 @@ import { Link } from '@inertiajs/vue3';
 const showingNavigationDropdown = ref(false);
 
 const logout = async () => {
-    console.log("Logging out")
     await window.cacheFetch.clearCaches();
 };
 

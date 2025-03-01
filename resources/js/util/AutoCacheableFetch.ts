@@ -96,18 +96,15 @@ export class AutoCacheableFetch {
             // Parse URL and get pathname
             const pathname = new URL(url, window.location.origin).pathname;
             
-            // Clean up the pathname to create cache name
-            let cacheName = pathname.replace(/^\/|\/$/g, "").replace(/\//g, "-") || "root";
+            // Use URL encoding for safe cache name
+            let cacheName = encodeURIComponent(pathname.replace(/^\/|\/$/g, "") || "root");
             
             // Limit length
             return cacheName.length > 50 ? cacheName.substring(0, 50) : cacheName;
         } catch (e) {
             // Fallback if URL parsing fails
             const strippedUrl = url.replace(/^(https?:\/\/)?([^\/]+)/, "");
-            let cacheName = strippedUrl
-                .replace(/^\/|\/$/g, "")
-                .replace(/[\/\?\&\=]+/g, "-")
-                .replace(/-+/g, "-") || "root";
+            let cacheName = encodeURIComponent(strippedUrl.replace(/^\/|\/$/g, "") || "root");
                 
             return cacheName.length > 50 ? cacheName.substring(0, 50) : cacheName;
         }

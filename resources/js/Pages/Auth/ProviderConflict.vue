@@ -20,11 +20,10 @@ const props = defineProps({
                 Please login with {{ originalProvider }} first.
             </p>
             <div class="flex gap-4">
-                <Link :href="route('provider.conflict.solve', params={
-                    token: token,
-                })" class="bg-blue-500 text-black px-4 py-2 rounded">
-                Login with {{ originalProvider }}
-                </Link>
+                <a :href="route('provider.conflict.solve', {token: token})" 
+                   class="bg-blue-500 text-white px-4 py-2 rounded">
+                   Login with {{ originalProvider }}
+                </a>
                 <Link :href="route('provider.conflict.cancel')" class="text-gray-600">
                 Cancel
                 </Link>

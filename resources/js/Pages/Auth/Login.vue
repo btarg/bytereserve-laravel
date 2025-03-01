@@ -30,7 +30,6 @@ const submit = () => {
 };
 
 const error = computed(() => usePage().props.flash.error);
-
 </script>
 
 <template>

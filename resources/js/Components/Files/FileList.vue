@@ -35,14 +35,6 @@ const uploadService = new S3UploadService();
 const uploadProgress = ref<Record<string, number>>({});
 const uploadsInProgress = ref<number>(0);
 
-const clearExplorerCaches = async () => {
-    try {
-        window.cacheFetch.clearCaches();
-    } catch (error) {
-        console.error('Error clearing explorer caches:', error);
-    }
-}
-
 const refreshFiles = async () => {
     console.log("Refreshing files");
     selectedItems.value = [];
@@ -50,7 +42,7 @@ const refreshFiles = async () => {
     
     try {
         // Clear all explorer caches to ensure we get fresh data
-        await clearExplorerCaches();
+        await window.cacheFetch.clearCaches();
         console.log('Explorer caches cleared');
         
         // Then fetch with network-only to ensure fresh data
