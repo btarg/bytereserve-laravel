@@ -4,7 +4,6 @@
  */
 export class AutoCacheableFetch {
     private cacheNames: Record<string, string>;
-    private cacheVersion: number;
     private defaultCacheName: string;
 
     /**
@@ -18,9 +17,7 @@ export class AutoCacheableFetch {
         cacheNames: Record<string, string> = {},
         defaultCacheName: string = "default"
     ) {
-        this.cacheVersion = cacheVersion;
 
-        // Set up default cache names with versioning
         this.cacheNames = {
             default: `default-cache-v${cacheVersion}`,
             ...Object.fromEntries(
