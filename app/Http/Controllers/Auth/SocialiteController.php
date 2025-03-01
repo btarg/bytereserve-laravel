@@ -7,7 +7,6 @@ use App\Models\User;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Hash;
-use App\Models\UserProvider;
 use Inertia\Inertia;
 use App\Http\Controllers\Controller;
 
@@ -16,7 +15,6 @@ class SocialiteController extends Controller
     public function redirectToProvider($provider)
     {
         return Socialite::driver($provider)
-            ->stateless()
             ->redirect();
     }
 
@@ -52,7 +50,7 @@ class SocialiteController extends Controller
         }
     
         // 2. Get social user data
-        $socialUser = Socialite::driver($provider)->stateless()->user();
+        $socialUser = Socialite::driver($provider)->user();
         $token = Str::random(40);
     
         // 3. Check email existence first
