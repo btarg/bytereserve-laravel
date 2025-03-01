@@ -12,6 +12,7 @@ import {
 import { S3UploadService } from "@/util/S3UploadService";
 import { useToast } from "vue-toastification";
 import { route } from '../../../../vendor/tightenco/ziggy/src/js';
+import { formatFileSize } from '@/util/FormattingUtils';
 
 const toast = useToast();
 const props = defineProps<{
@@ -157,21 +158,6 @@ const fetchItems = async () => {
     } finally {
         isLoading.value = false;
     }
-};
-
-// Format file size for display
-const formatFileSize = (bytes?: number): string => {
-    if (!bytes) return '-';
-    const units = ['B', 'KB', 'MB', 'GB'];
-    let size = bytes;
-    let unitIndex = 0;
-
-    while (size >= 1024 && unitIndex < units.length - 1) {
-        size /= 1024;
-        unitIndex++;
-    }
-
-    return `${size.toFixed(1)} ${units[unitIndex]}`;
 };
 
 // Selection handling

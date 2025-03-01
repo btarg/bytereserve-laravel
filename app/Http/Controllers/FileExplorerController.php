@@ -86,7 +86,7 @@ class FileExplorerController extends Controller
     }
 
     /**
-     * Store a new file record and invalidate cache
+     * Store a new file record, update folder sizes, and invalidate cache
      */
     public function storeFile(Request $request)
     {
@@ -112,6 +112,14 @@ class FileExplorerController extends Controller
 
             $file->save();
 
+            // Update the folder size if this file is in a folder
+            if ($validated['folder_id']) {
+                $folder = Folder::find($validated['folder_id']);
+                if ($folder) {
+                    $folder->addFileSize($validated['size']);
+                }
+            }
+
             // Invalidate cache for both the root folder and the folder this file was added to
             $this->invalidateExplorerCache('/');
             if ($validated['folder_id']) {
@@ -135,11 +143,12 @@ class FileExplorerController extends Controller
     }
 
     /**
-     * Store a new folder and invalidate cache
+     * Store a new folder and update parent folder sizes
      */
     public function storeFolder(Request $request)
     {
         try {
+
             $validated = $request->validate([
                 'name' => 'required|string|max:255',
                 'parent_id' => 'nullable|exists:folders,id',
@@ -150,6 +159,7 @@ class FileExplorerController extends Controller
             $folder = new Folder();
             $folder->user_id = $user->id;
             $folder->name = $validated['name'];
+            $folder->size = 0; // New folders start with size 0
             $parentId = null;
 
             // Handle parent folder by path if provided
@@ -179,6 +189,7 @@ class FileExplorerController extends Controller
             if ($parentId) {
                 $this->invalidateFolderCache($parentId);
             }
+
 
             return response()->json($folder);
         } catch (\Exception $e) {
@@ -228,11 +239,12 @@ class FileExplorerController extends Controller
     }
 
     /**
-     * Delete a file and invalidate cache
+     * Delete a file, update folder sizes, and invalidate cache
      */
     public function destroyFile(File $file)
     {
         try {
+
             // Check if user has access to this file
             if ($file->user_id !== Auth::id()) {
                 return response()->json(['error' => 'Unauthorized'], 403);
@@ -240,12 +252,21 @@ class FileExplorerController extends Controller
 
             // Get the folder ID before deleting the file
             $folderId = $file->folder_id;
+            $fileSize = $file->size;
+
+            // Get the folder reference if it exists
+            $folder = $folderId ? Folder::find($folderId) : null;
 
             // Get the S3 key for deletion later if needed
             $s3Key = $file->path;
 
             // Delete the file record
             $file->delete();
+
+            // Update folder size if the file was in a folder
+            if ($folder) {
+                $folder->removeFileSize($fileSize);
+            }
 
             // Invalidate relevant caches
             $this->invalidateExplorerCache('/');
@@ -263,8 +284,6 @@ class FileExplorerController extends Controller
                 ]);
             }
 
-
-
             return response()->json(['message' => 'File deleted successfully']);
         } catch (\Exception $e) {
             Log::error('File deletion failed', [
@@ -278,7 +297,7 @@ class FileExplorerController extends Controller
     }
 
     /**
-     * Delete a folder and invalidate cache
+     * Delete a folder and update parent folder sizes
      */
     public function destroyFolder(Folder $folder)
     {
@@ -288,8 +307,10 @@ class FileExplorerController extends Controller
                 return response()->json(['error' => 'Unauthorized'], 403);
             }
 
-            // Store parent ID for cache invalidation
+            // Store parent ID for cache invalidation and size updates
             $parentId = $folder->parent_id;
+            $parentFolder = $parentId ? Folder::find($parentId) : null;
+            $folderSize = $folder->size;
 
             // Recursively gather all folder IDs to invalidate their caches
             $folderIds = $this->getAllFolderIds($folder);
@@ -300,6 +321,11 @@ class FileExplorerController extends Controller
             // This will automatically delete all child files and folders
             // because of the cascadeOnDelete constraint in the migration
             $folder->delete();
+
+            // Update parent folder size if it exists
+            if ($parentFolder) {
+                $parentFolder->removeFileSize($folderSize);
+            }
 
             // Invalidate all related caches
             foreach ($folderIds as $folderId) {
@@ -314,6 +340,7 @@ class FileExplorerController extends Controller
             if ($parentId) {
                 $this->invalidateFolderCache($parentId);
             }
+
 
             return response()->json(['message' => 'Folder deleted successfully']);
         } catch (\Exception $e) {
