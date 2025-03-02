@@ -39,12 +39,12 @@ const uploadService = new S3UploadService();
 const uploadProgress = ref<Record<string, number>>({});
 const uploadsInProgress = ref<number>(0);
 
-const refreshFiles = async () => {
-    console.log("Refreshing files");
+const refreshFiles = async (forceSync = false) => {
+    console.log("Refreshing files, forceSync:", forceSync);
     selectedItems.value = [];
     emit('selection-change', []);
 
-    await fetchItems();
+    await fetchItems(forceSync);
 };
 
 defineExpose({
@@ -359,9 +359,9 @@ onMounted(async () => {
         console.error('Error waiting for database initialization:', error);
     }
 
-    // Fetch items regardless of initialization result (will fall back to network)
-    fetchItems();
+    refreshFiles(false);
 });
+
 onUnmounted(() => {
     document.removeEventListener('dragover', handleDragOver);
     document.removeEventListener('dragleave', handleDragLeave);

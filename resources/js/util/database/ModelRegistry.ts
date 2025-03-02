@@ -29,7 +29,7 @@ export async function initializeDatabase() {
 // Generic sync function for any model
 async function syncModel(modelName: string, syncEndpoint: string, lastSync: number) {
     try {
-        const response = await fetch(
+        const response = await window.cacheFetch.fetch(
             route(syncEndpoint) + '?' + new URLSearchParams({
                 since: lastSync.toString()
             }).toString(),

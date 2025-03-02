@@ -19,7 +19,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
     (e: 'path-change', path: string): void;
-    (e: 'refresh-files'): void;
+    (e: 'refresh-files', forceSync?: boolean): void;
 }>();
 
 const isCreatingFolder = ref(false);
@@ -30,6 +30,8 @@ const createNewFolder = async () => {
     if (!newFolderName.value.trim()) return;
 
     try {
+        isCreatingFolder.value = true;
+        
         // Create on the server
         const response = await window.cacheFetch.post(route('folders.store'), {
             name: newFolderName.value,
@@ -59,17 +61,25 @@ const createNewFolder = async () => {
                 // Save to IndexedDB
                 await Folders().save(folderRecord);
                 console.log(`Folder ${folderData.id} saved to IndexedDB`);
+
             } catch (dbError) {
                 console.warn(`Could not save folder to IndexedDB:`, dbError);
             }
         }
         
+        // Give the server a moment to process the folder creation
+        await new Promise(resolve => setTimeout(resolve, 300));
+        
+        // Reset UI state
         isCreatingFolder.value = false;
         newFolderName.value = '';
 
-        emit('refresh-files');
+        // Force refresh with true parameter to ensure fresh data after folder creation
+        emit('refresh-files', true);
+        
     } catch (error) {
         console.error('Failed to create folder:', error);
+        isCreatingFolder.value = false;
     }
 };
 

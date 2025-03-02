@@ -9,9 +9,9 @@ const currentPath = ref('/');
 const selectedItems = ref<FileItem[]>([]);
 const fileListRef = ref<InstanceType<typeof FileList> | null>(null);
 
-const refreshFileList = () => {
+const refreshFileList = (forceSync = false) => {
     if (fileListRef.value) {
-        fileListRef.value.refreshFiles();
+        fileListRef.value.refreshFiles(forceSync);
     }
 };
 
@@ -77,7 +77,7 @@ const handleSelectionChange = (items: FileItem[]) => {
                 <!-- Main content area -->
                 <main class="flex-1 flex flex-col">
                     <FileToolbar :selected-items="selectedItems" :current-path="currentPath"
-                        @path-change="handlePathChange" @refresh-files="refreshFileList" />
+                        @path-change="handlePathChange" @refresh-files="(forceSync) => refreshFileList(forceSync)" />
                     <Breadcrumb :current-path="currentPath" @path-change="handlePathChange" />
                     <FileList ref="fileListRef" :current-path="currentPath" @selection-change="handleSelectionChange"
                         @path-change="handlePathChange" />
