@@ -2,6 +2,9 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, defineProps, defineEmits } from 'vue';
 import { FileItem } from '../../types';
+import { getItemsByPath, Files, Folders } from '@/util/database/ModelRegistry';
+
+
 import {
     FolderIcon,
     DocumentIcon,
@@ -13,6 +16,7 @@ import { S3UploadService } from "@/util/S3UploadService";
 import { useToast } from "vue-toastification";
 import { route } from '../../../../vendor/tightenco/ziggy/src/js';
 import { formatFileSize } from '@/util/FormattingUtils';
+import { FileRecord } from '@/util/database/Schemas';
 
 const toast = useToast();
 const props = defineProps<{
@@ -39,18 +43,8 @@ const refreshFiles = async () => {
     console.log("Refreshing files");
     selectedItems.value = [];
     emit('selection-change', []);
-    
-    try {
-        // Clear all explorer caches to ensure we get fresh data
-        await window.cacheFetch.clearCaches();
-        console.log('Explorer caches cleared');
-        
-        // Then fetch with network-only to ensure fresh data
-        await fetchItems();
-    } catch (error) {
-        console.error('Error refreshing files:', error);
-        toast.error("Failed to refresh files");
-    }
+
+    await fetchItems();
 };
 
 defineExpose({
@@ -59,7 +53,7 @@ defineExpose({
 
 const handleItemClick = async (item: FileItem) => {
     if (item.type === 'folder') {
-        // Navigate to the folder
+        // Navigate to the folde
         navigateToFolder(item.path);
     } else {
         await downloadFile(item);
@@ -111,26 +105,54 @@ const downloadFile = async (item: FileItem) => {
     }
 };
 
-// Fetch files and folders for the current path
-const fetchItems = async () => {
+// Update the fetchItems function to ensure DB is initialized
+const fetchItems = async (forceSync = false) => {
     isLoading.value = true;
     try {
-        const response = await window.cacheFetch.get(
-            // Convert the route to a URL with query parameters
-            route('explorer.index') + '?' + new URLSearchParams({
-                path: props.currentPath
-            }).toString(),
-        );
+        // Ensure database is initialized before fetching
+        if (window.dbInitPromise) {
+            try {
+                await window.dbInitPromise;
+            } catch (initError) {
+                console.error('Database initialization error:', initError);
+                // Continue to network fallback
+            }
+        }
+        
+        let data;
 
-        const data = await response.json();
+        // First try to get data from IndexedDB
+        try {
+            data = await getItemsByPath(props.currentPath, forceSync);
+            console.log('Loaded files from IndexedDB');
+        } catch (offlineError) {
+            console.warn('Failed to get items from IndexedDB:', offlineError);
 
+            // Fall back to the network if IndexedDB fails
+            try {
+                const response = await window.cacheFetch.get(
+                    route('explorer.index') + '?' + new URLSearchParams({
+                        path: props.currentPath
+                    }).toString(),
+                );
+                data = await response.json();
+                console.log('Loaded files from network');
+            } catch (networkError) {
+                console.error('Failed to load files from network:', networkError);
 
+                // If both IndexedDB and network fail, provide an empty data structure
+                data = { items: [], current_folder_id: null };
+                toast.error("Failed to load files. Working in offline mode with limited data.");
+            }
+        }
+
+        // Map the items to our expected format
         files.value = data.items.map(item => {
             // For folders, create the correct path
             let itemPath = '';
             if (item.type === 'folder') {
-                // Construct proper folder path
-                itemPath = `${props.currentPath === '/' ? '' : props.currentPath}/${item.name}`;
+                // Use the path from the database if available, otherwise construct it
+                itemPath = item.path || `${props.currentPath === '/' ? '' : props.currentPath}/${item.name}`;
             } else {
                 // For files, use the path from the database (S3 key)
                 itemPath = item.path || '';
@@ -139,7 +161,7 @@ const fetchItems = async () => {
             return {
                 id: item.id,
                 name: item.name,
-                type: item.type, // Use the explicitly set type from backend
+                type: item.type,
                 size: item.size || 0,
                 modified_at: new Date(item.updated_at || item.created_at),
                 path: itemPath,
@@ -154,10 +176,12 @@ const fetchItems = async () => {
     } catch (error) {
         console.error('Error fetching files:', error);
         toast.error("Failed to load files. Please try again.");
+        files.value = []; // Reset files on error
     } finally {
         isLoading.value = false;
     }
 };
+
 
 // Selection handling
 const toggleSelection = (item: FileItem) => {
@@ -215,20 +239,71 @@ async function processFile(file: File) {
         // Start timing the upload
         const startTime = performance.now();
         
-        const result = await uploadService.uploadFile(file, "password", currentFolderId.value, (progress) => {
-            uploadProgress.value[fileId] = progress;
-        });
+        // First save to Dexie with a temporary ID
+        const tempId = 'temp_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        const fileRecord: FileRecord = {
+            id: tempId,
+            name: file.name,
+            type: 'file',
+            path: tempId, // Will be replaced with S3 key after upload
+            folder_id: currentFolderId.value,
+            mime_type: file.type || 'application/octet-stream',
+            size: file.size,
+            local_blob: file, // Store the file blob locally for later upload
+            pending_upload: true,
+            created_at: Date.now(),
+            updated_at: Date.now()
+        };
+        
+        // Save to Dexie
+        await Files().save(fileRecord);
+        
+        let result;
+        
+        try {
+            // Try to upload to S3
+            result = await uploadService.uploadFile(file, "password", currentFolderId.value, (progress) => {
+                uploadProgress.value[fileId] = progress;
+            });
+            
+            // If successful, update the record with real ID and S3 path
+            if (result && result.id) {
+                // Delete the temporary record
+                await Files().delete(tempId);
+                
+                // The server should have already created the record, but we'll update local DB
+                const serverRecord: FileRecord = {
+                    id: result.id,
+                    name: result.name,
+                    type: 'file',
+                    path: result.path,
+                    folder_id: currentFolderId.value,
+                    mime_type: result.mime_type,
+                    size: result.size,
+                    created_at: Date.now(),
+                    updated_at: Date.now()
+                };
+                
+                await Files().save(serverRecord);
+                
+                // Then force fetch with the latest data including updated folder sizes
+                await fetchItems(true);
+            }
+        } catch (uploadError) {
+            console.error('Upload failed, file will be saved locally:', uploadError);
+            // Keep the local record with pending_upload flag
+            // Will be uploaded later when connection is available
+        }
         
         // Calculate upload duration
         const endTime = performance.now();
         const duration = (endTime - startTime) / 1000; // Convert to seconds
         
         uploadsInProgress.value--;
-        console.log(`Upload completed: ${result.name} (${formatFileSize(file.size)}) in ${duration.toFixed(2)}s`);
+        console.log(`Upload completed: ${file.name} (${formatFileSize(file.size)}) in ${duration.toFixed(2)}s`);
         toast.success(`Uploaded ${file.name} in ${duration.toFixed(2)}s`);
         
-        // Don't call refreshFiles() inside the loop - we'll refresh once at the end
-        return result;
+        return result || fileRecord; // Return either S3 result or local record
     } catch (error) {
         uploadsInProgress.value--;
         console.error('File upload failed:', error);
@@ -258,10 +333,10 @@ const handleDrop = async (event: DragEvent) => {
             await Promise.all(batch.map(file => processFile(file)));
         }
     } finally {
-        // IMPORTANT: Refresh files once after all uploads complete
         await refreshFiles();
     }
 };
+
 
 watch(() => props.currentPath, () => {
     selectedItems.value = [];
@@ -269,14 +344,24 @@ watch(() => props.currentPath, () => {
     fetchItems();
 });
 
-onMounted(() => {
+onMounted(async () => {
     document.addEventListener('dragover', handleDragOver);
     document.addEventListener('dragleave', handleDragLeave);
     document.addEventListener('drop', handleDrop);
     window.addEventListener('popstate', handlePopState);
+
+    try {
+        // Wait for database to initialize before fetching
+        if (window.dbInitPromise) {
+            await window.dbInitPromise;
+        }
+    } catch (error) {
+        console.error('Error waiting for database initialization:', error);
+    }
+
+    // Fetch items regardless of initialization result (will fall back to network)
     fetchItems();
 });
-
 onUnmounted(() => {
     document.removeEventListener('dragover', handleDragOver);
     document.removeEventListener('dragleave', handleDragLeave);

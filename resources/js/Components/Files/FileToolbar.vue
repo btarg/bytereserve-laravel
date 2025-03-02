@@ -9,6 +9,8 @@ import {
 } from '@heroicons/vue/24/outline';
 import { FileItem } from '../../types';
 import { route } from '../../../../vendor/tightenco/ziggy/src/js';
+import { Files, Folders } from '@/util/database/ModelRegistry';
+import { FolderRecord } from '@/util/database/Schemas';
 
 const props = defineProps<{
     selectedItems: FileItem[];
@@ -28,15 +30,43 @@ const createNewFolder = async () => {
     if (!newFolderName.value.trim()) return;
 
     try {
-        await window.cacheFetch.post('/api/folders', {
+        // Create on the server
+        const response = await window.cacheFetch.post(route('folders.store'), {
             name: newFolderName.value,
             parent_path: props.currentPath
         });
-
+        
+        // Get the newly created folder data
+        const folderData = await response.json();
+        
+        // Also save to IndexedDB for offline access
+        if (folderData && folderData.id) {
+            try {
+                // Create folder record for IndexedDB
+                const folderRecord: FolderRecord = {
+                    id: folderData.id,
+                    name: folderData.name,
+                    type: 'folder',
+                    path: props.currentPath === '/' ? 
+                        `/${folderData.name}` : 
+                        `${props.currentPath}/${folderData.name}`,
+                    parent_id: folderData.parent_id,
+                    size: 0,
+                    created_at: Date.now(),
+                    updated_at: Date.now()
+                };
+                
+                // Save to IndexedDB
+                await Folders().save(folderRecord);
+                console.log(`Folder ${folderData.id} saved to IndexedDB`);
+            } catch (dbError) {
+                console.warn(`Could not save folder to IndexedDB:`, dbError);
+            }
+        }
+        
         isCreatingFolder.value = false;
         newFolderName.value = '';
 
-        // Explicitly emit refresh event instead of just path-change
         emit('refresh-files');
     } catch (error) {
         console.error('Failed to create folder:', error);
@@ -78,18 +108,38 @@ const deleteSelectedItems = async () => {
     try {
         for (const item of props.selectedItems) {
             if (item.type === 'file') {
+                // Delete from the server
                 await window.cacheFetch.delete(route('files.destroy.{file}', { file: item.id }));
+
+                // Also delete from IndexedDB
+                try {
+                    await Files().delete(item.id);
+                    console.log(`File ${item.id} deleted from IndexedDB`);
+                } catch (dbError) {
+                    console.warn(`Could not delete file ${item.id} from IndexedDB:`, dbError);
+                }
             } else {
+                // Delete from the server
                 await window.cacheFetch.delete(route('folders.destroy.{folder}', { folder: item.id }));
+
+                // Also delete from IndexedDB
+                try {
+                    await Folders().delete(item.id);
+                    console.log(`Folder ${item.id} deleted from IndexedDB`);
+                } catch (dbError) {
+                    console.warn(`Could not delete folder ${item.id} from IndexedDB:`, dbError);
+                }
             }
         }
 
-        // Explicitly emit the refresh event
+        // Refresh the UI
         emit('refresh-files');
     } catch (error) {
         console.error('Failed to delete items:', error);
     }
 };
+
+
 </script>
 
 <template>

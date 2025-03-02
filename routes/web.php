@@ -1,13 +1,20 @@
 <?php
 
-use App\Http\Controllers\Auth\SolveProviderConflictController;
-use App\Http\Controllers\Auth\SocialiteController;
-use App\Http\Controllers\S3UploadController;
-use App\Http\Controllers\ProfileController;
-use App\Http\Controllers\FileExplorerController;
+use Inertia\Inertia;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Route;
-use Inertia\Inertia;
+use App\Http\Controllers\Auth\SocialiteController;
+
+
+use App\Http\Controllers\Auth\SolveProviderConflictController;
+use App\Http\Controllers\S3UploadController;
+use App\Http\Controllers\ProfileController;
+
+
+use App\Http\Controllers\FileExplorerController;
+use App\Http\Controllers\FileSyncController;
+use App\Http\Controllers\FolderSyncController;
+
 
 Route::get('/', function () {
     return Inertia::render('Welcome', [
@@ -73,6 +80,9 @@ Route::prefix('api')->middleware('auth')->group(function () {
     Route::get('/files/{file}/download', [FileExplorerController::class, 'download'])->name('files.download.{file}');
     Route::delete('/files/{file}', [FileExplorerController::class, 'destroyFile'])->name('files.destroy.{file}');
     Route::delete('/folders/{folder}', [FileExplorerController::class, 'destroyFolder'])->name('folders.destroy.{folder}');
+    
+    Route::get('/files/sync', [FileSyncController::class, 'sync'])->name('explorer.files.sync');
+    Route::get('/folders/sync', [FolderSyncController::class, 'sync'])->name('explorer.folders.sync');
 });
 
 require __DIR__.'/auth.php';
