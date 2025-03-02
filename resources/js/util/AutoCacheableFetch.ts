@@ -267,6 +267,7 @@ export class AutoCacheableFetch {
             default:
                 const cachedFirstResponse = await cache.match(request);
                 if (cachedFirstResponse) {
+                    console.log("Returning cached response for", request.url);
                     if (maxAge && this.isResponseExpired(cachedFirstResponse, maxAge)) {
                         return this.fetchFromNetwork(cache, request, shouldCache);
                     }
