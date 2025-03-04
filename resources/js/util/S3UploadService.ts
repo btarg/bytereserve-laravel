@@ -94,7 +94,7 @@ export class S3UploadService {
                 folder_id: folderId,
             });
 
-            const saveFileResponse = await window.cacheFetch.post('/api/files', {
+            const saveFileResponse = await window.cacheFetch.post(route('files.store'), {
                 name: file.name,
                 path: path, // Use the S3 key as the path
                 mime_type: file.type || 'application/octet-stream',
@@ -181,7 +181,7 @@ export class S3UploadService {
                 throw new Error(`Failed to upload file: ${uploadResponse.statusText}`);
             }
 
-            const detailsResponse = await window.cacheFetch.post('/api/uploads/details', { key });
+            const detailsResponse = await window.cacheFetch.post(route('uploads.details'), { key });
             const detailsData = await detailsResponse.json();
             return { ...detailsData, key };
         } catch (error) {

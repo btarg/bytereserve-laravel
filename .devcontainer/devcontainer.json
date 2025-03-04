@@ -12,12 +12,20 @@
         "8000": {
             "label": "Laravel Application",
             "onAutoForward": "openBrowser"
+        },
+        "5173": {
+            "label": "Vite Dev Server"
+        },
+        "3306": {
+            "label": "Database"
         }
     },
     "forwardPorts": [
-        8000
+        8000,
+        5173,
+        3306
     ],
-    "postCreateCommand": "composer update && npm install && php artisan key:generate && php artisan migrate",
+    "postCreateCommand": "chmod +x ./fix-sqlite-permissions.sh && sudo ./fix-sqlite-permissions.sh && composer update && npm install && php artisan key:generate && php artisan migrate",
     "remoteUser": "vscode",
     "customizations": {
         "vscode": {

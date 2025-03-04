@@ -51,6 +51,14 @@ function workerDevPlugin() {
 }
 
 export default defineConfig({
+    server: {
+        // Allow connections from any IP
+        host: 'localhost',
+        // Correctly handle HMR in container
+        hmr: {
+            host: 'localhost'
+        },
+    },
     plugins: [
         laravel({
             input: ['resources/js/app.ts'],
