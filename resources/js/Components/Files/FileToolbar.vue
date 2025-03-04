@@ -8,7 +8,7 @@ import {
     FolderPlusIcon
 } from '@heroicons/vue/24/outline';
 import { FileItem } from '../../types';
-import { route } from '../../../../vendor/tightenco/ziggy/src/js';
+import { route } from 'ziggy-js';
 import { Files, Folders } from '@/util/database/ModelRegistry';
 import { FolderRecord } from '@/util/database/Schemas';
 

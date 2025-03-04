@@ -1,4 +1,4 @@
-import { route } from '../../../../vendor/tightenco/ziggy/src/js';
+import { route } from 'ziggy-js';
 import dbService from './Database';
 import { DB_NAME, MODEL_DEFINITIONS } from './Schemas';
 

@@ -14,7 +14,7 @@ import {
 
 import { S3UploadService } from "@/util/S3UploadService";
 import { useToast } from "vue-toastification";
-import { route } from '../../../../vendor/tightenco/ziggy/src/js';
+import { route } from 'ziggy-js';
 import { formatFileSize } from '@/util/FormattingUtils';
 import { FileRecord } from '@/util/database/Schemas';
 

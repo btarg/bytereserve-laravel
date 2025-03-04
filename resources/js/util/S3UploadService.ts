@@ -1,5 +1,5 @@
 ﻿import { WorkerPoolManager } from './WorkerPoolManager';
-import { route } from '../../../vendor/tightenco/ziggy/src/js';
+import { route } from 'ziggy-js';
 
 const KEY_LENGTH = 256;
 const CHUNK_SIZE_MB = 16;
