@@ -63,7 +63,9 @@ export default defineConfig({
                     includeAbsolute: false,
                 },
             },
-        })
+        }),
+        // @ts-expect-error
+        workerDevPlugin(),
     ],
     build: {
         manifest: true,
