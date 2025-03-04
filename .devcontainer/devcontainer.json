@@ -6,8 +6,7 @@
     "features": {
         "ghcr.io/devcontainers/features/node:1": {
             "version": "lts"
-        },
-        "ghcr.io/devcontainers/features/composer:1": {}
+        }
     },
     "portsAttributes": {
         "8000": {
@@ -18,7 +17,7 @@
     "forwardPorts": [
         8000
     ],
-    "postCreateCommand": "composer install && npm install && php artisan key:generate && php artisan migrate",
+    "postCreateCommand": "composer update && npm install && php artisan key:generate && php artisan migrate",
     "remoteUser": "vscode",
     "customizations": {
         "vscode": {
