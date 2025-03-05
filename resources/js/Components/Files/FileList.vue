@@ -64,7 +64,7 @@ const handleItemClick = async (item: FileItem) => {
 const navigateToFolder = (folderPath: string) => {
     // Emit event to update the current path in parent components
     emit('path-change', folderPath);
-    
+
     // Update browser history
     const url = new URL(window.location.href);
     url.searchParams.set('folder', folderPath);
@@ -80,32 +80,103 @@ const downloadFile = async (item: FileItem) => {
     try {
         downloading.value[item.id] = true;
 
-        const response = await window.cacheFetch.get(route('files.download.{file}', { file: item.id }));
+        // Get the download URL from the API
+        const response = await window.cacheFetch.get(
+            route('files.download.{file}', { file: item.id }),
+            {},
+            {},
+            true // Enable retryOnError to get fresh data if needed
+        );
+
         const data = await response.json();
         console.log(data);
 
-
         if (data.download_url) {
-            // Create a temporary link and click it
-            const link = document.createElement('a');
-            link.href = data.download_url;
-            link.setAttribute('download', item.name);
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            toast.success(`Downloading ${item.name}`);
+            try {
+                // Parse the URL to check expiration
+                const url = new URL(data.download_url);
+                const amzDate = url.searchParams.get('X-Amz-Date');
+                const amzExpires = url.searchParams.get('X-Amz-Expires');
+                
+                let isExpired = false;
+                
+                if (amzDate && amzExpires) {
+                    // Parse the date and expiration time
+                    // Format: YYYYMMDDTHHMMSSZ (ISO 8601 format)
+                    const year = parseInt(amzDate.substring(0, 4));
+                    const month = parseInt(amzDate.substring(4, 6)) - 1; // Months are 0-indexed in JS
+                    const day = parseInt(amzDate.substring(6, 8));
+                    const hour = parseInt(amzDate.substring(9, 11));
+                    const minute = parseInt(amzDate.substring(11, 13));
+                    const second = parseInt(amzDate.substring(13, 15));
+                    
+                    const dateObj = new Date(Date.UTC(year, month, day, hour, minute, second));
+                    const expiresInSeconds = parseInt(amzExpires);
+                    const expirationTime = new Date(dateObj.getTime() + expiresInSeconds * 1000);
+                    
+                    // Check if the URL has expired
+                    isExpired = new Date() > expirationTime;
+                    console.log(`URL expiration check: Current time: ${new Date().toISOString()}, Expires: ${expirationTime.toISOString()}, Expired: ${isExpired}`);
+                }
+                
+                if (!isExpired) {
+                    // URL is still valid, proceed with download
+                    const link = document.createElement('a');
+                    link.href = data.download_url;
+                    link.setAttribute('download', item.name);
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    toast.success(`Downloading ${item.name}`);
+                } else {
+                    // URL has expired, get a fresh one
+                    console.log("Download link expired, generating a new one...");
+                    
+                    const newLinkResponse = await window.cacheFetch.get(
+                        route('files.download.{file}', { file: item.id }), 
+                        {},
+                        { cacheStrategy: 'network-only' }
+                    );
+                    
+                    const newData = await newLinkResponse.json();
+                    
+                    if (newData.download_url) {
+                        const link = document.createElement('a');
+                        link.href = newData.download_url;
+                        link.setAttribute('download', item.name);
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                        toast.success(`Downloading ${item.name}`);
+                    } else {
+                        toast.error("Failed to generate a new download link");
+                    }
+                }
+            } catch (error) {
+                console.error('Error processing download URL:', error);
+                
+                // If URL parsing fails, try direct download as a fallback
+                console.log("Attempting direct download as fallback...");
+                const link = document.createElement('a');
+                link.href = data.download_url;
+                link.setAttribute('download', item.name);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                toast.success(`Downloading ${item.name}`);
+            }
         } else {
             toast.error("Download URL not found");
         }
     } catch (error) {
         console.error('Error downloading file:', error);
-        toast.error(`Error downloading file: ${error.response?.data?.error || 'Unknown error'}`);
+        toast.error(`Error downloading file: ${error.message || 'Unknown error'}`);
     } finally {
         downloading.value[item.id] = false;
     }
 };
 
-// Update the fetchItems function to ensure DB is initialized
+
 const fetchItems = async (forceSync = false) => {
     isLoading.value = true;
     try {
@@ -118,7 +189,7 @@ const fetchItems = async (forceSync = false) => {
                 // Continue to network fallback
             }
         }
-        
+
         let data;
 
         // First try to get data from IndexedDB
@@ -235,10 +306,10 @@ async function processFile(file: File) {
         // Initialize progress tracking
         const fileId = `${file.name}-${file.size}-${Date.now()}`;
         uploadProgress.value[fileId] = 0;
-        
+
         // Start timing the upload
         const startTime = performance.now();
-        
+
         // First save to Dexie with a temporary ID
         const tempId = 'temp_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
         const fileRecord: FileRecord = {
@@ -254,23 +325,23 @@ async function processFile(file: File) {
             created_at: Date.now(),
             updated_at: Date.now()
         };
-        
+
         // Save to Dexie
         await Files().save(fileRecord);
-        
+
         let result;
-        
+
         try {
             // Try to upload to S3
             result = await uploadService.uploadFile(file, "password", currentFolderId.value, (progress) => {
                 uploadProgress.value[fileId] = progress;
             });
-            
+
             // If successful, update the record with real ID and S3 path
             if (result && result.id) {
                 // Delete the temporary record
                 await Files().delete(tempId);
-                
+
                 // The server should have already created the record, but we'll update local DB
                 const serverRecord: FileRecord = {
                     id: result.id,
@@ -283,9 +354,9 @@ async function processFile(file: File) {
                     created_at: Date.now(),
                     updated_at: Date.now()
                 };
-                
+
                 await Files().save(serverRecord);
-                
+
                 // Then force fetch with the latest data including updated folder sizes
                 await fetchItems(true);
             }
@@ -294,15 +365,15 @@ async function processFile(file: File) {
             // Keep the local record with pending_upload flag
             // Will be uploaded later when connection is available
         }
-        
+
         // Calculate upload duration
         const endTime = performance.now();
         const duration = (endTime - startTime) / 1000; // Convert to seconds
-        
+
         uploadsInProgress.value--;
         console.log(`Upload completed: ${file.name} (${formatFileSize(file.size)}) in ${duration.toFixed(2)}s`);
         toast.success(`Uploaded ${file.name} in ${duration.toFixed(2)}s`);
-        
+
         return result || fileRecord; // Return either S3 result or local record
     } catch (error) {
         uploadsInProgress.value--;
@@ -325,7 +396,7 @@ const handleDrop = async (event: DragEvent) => {
     // Process files concurrently but limit the number
     const filesToProcess = Array.from(droppedFiles);
     const batchSize = 5;
-    
+
     try {
         // Process files in batches
         for (let i = 0; i < filesToProcess.length; i += batchSize) {
@@ -390,8 +461,7 @@ onUnmounted(() => {
 
             <div v-for="item in files" :key="item.id"
                 class="grid grid-cols-12 gap-4 px-4 py-3 rounded-lg hover:bg-gray-50 cursor-pointer"
-                :class="{ 'bg-blue-50': isSelected(item) }"
-                @click="toggleSelection(item)">
+                :class="{ 'bg-blue-50': isSelected(item) }" @click="toggleSelection(item)">
                 <div class="col-span-6 flex items-center space-x-3">
                     <CheckCircleIcon class="w-5 h-5" :class="isSelected(item) ? 'text-blue-500' : 'text-gray-200'" />
                     <div class="flex items-center" @click.stop="handleItemClick(item)">
