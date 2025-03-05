@@ -11,7 +11,7 @@ import {
     ArrowDownTrayIcon
 } from '@heroicons/vue/24/outline';
 
-import { S3UploadService } from "@/util/S3UploadService";
+import { S3UploadService } from "@/util/uploads/S3UploadService";
 import { useToast } from "vue-toastification";
 import { route } from 'ziggy-js';
 import { formatFileSize } from '@/util/FormattingUtils';

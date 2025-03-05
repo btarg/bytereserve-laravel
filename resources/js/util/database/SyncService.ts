@@ -1,5 +1,5 @@
 import dbService from './Database';
-import { S3UploadService } from "../S3UploadService";
+import { S3UploadService } from "../uploads/S3UploadService";
 
 
 export class SyncService {

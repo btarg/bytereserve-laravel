@@ -1,6 +1,5 @@
-﻿<!-- filepath: /c:/Users/BenTa/Documents/Laravel/chirper/resources/js/Components/Files/FileToolbar.vue -->
-<script setup lang="ts">
-import { ref } from 'vue';
+﻿<script setup lang="ts">
+import { nextTick, ref, watch } from 'vue';
 import {
     ArrowDownTrayIcon,
     TrashIcon,
@@ -10,7 +9,7 @@ import {
 import { FileItem } from '../../types';
 import { route } from 'ziggy-js';
 import { Files, Folders } from '@/util/database/ModelRegistry';
-import { FolderRecord } from '@/util/database/Schemas';
+import { storeNewFolder } from '@/util/uploads/FolderManagement';
 
 const props = defineProps<{
     selectedItems: FileItem[];
@@ -26,49 +25,25 @@ const isCreatingFolder = ref(false);
 const newFolderName = ref('');
 const downloading = ref(false);
 
+const newFolderInput = ref<HTMLInputElement | null>(null);
+
+// Watch for changes to isCreatingFolder
+watch(isCreatingFolder, async (newValue) => {
+    if (newValue) {
+        // Wait for DOM to update
+        await nextTick();
+        // Focus the input
+        newFolderInput.value?.focus();
+    }
+});
+
 const createNewFolder = async () => {
     if (!newFolderName.value.trim()) return;
 
+    isCreatingFolder.value = true;
     try {
-        isCreatingFolder.value = true;
         
-        // Create on the server
-        const response = await window.cacheFetch.post(route('folders.store'), {
-            name: newFolderName.value,
-            parent_path: props.currentPath
-        });
-        
-        // Get the newly created folder data
-        const folderData = await response.json();
-        
-        // Also save to IndexedDB for offline access
-        if (folderData && folderData.id) {
-            try {
-                // Create folder record for IndexedDB
-                const folderRecord: FolderRecord = {
-                    id: folderData.id,
-                    name: folderData.name,
-                    type: 'folder',
-                    path: props.currentPath === '/' ? 
-                        `/${folderData.name}` : 
-                        `${props.currentPath}/${folderData.name}`,
-                    parent_id: folderData.parent_id,
-                    size: 0,
-                    created_at: Date.now(),
-                    updated_at: Date.now()
-                };
-                
-                // Save to IndexedDB
-                await Folders().save(folderRecord);
-                console.log(`Folder ${folderData.id} saved to IndexedDB`);
-
-            } catch (dbError) {
-                console.warn(`Could not save folder to IndexedDB:`, dbError);
-            }
-        }
-        
-        // Give the server a moment to process the folder creation
-        await new Promise(resolve => setTimeout(resolve, 300));
+        await storeNewFolder(props.currentPath, newFolderName.value.trim());
         
         // Reset UI state
         isCreatingFolder.value = false;
@@ -164,7 +139,7 @@ const deleteSelectedItems = async () => {
 
             <!-- New Folder Form -->
             <form v-else @submit.prevent="createNewFolder" class="flex items-center space-x-2">
-                <input type="text" v-model="newFolderName" placeholder="Enter folder name"
+                <input type="text" ref="newFolderInput" v-model="newFolderName" placeholder="Enter folder name"
                     class="block w-64 rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
                     autoFocus />
                 <button type="submit"

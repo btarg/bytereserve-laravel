@@ -1,6 +1,6 @@
-﻿import { Files, Folders } from './database/ModelRegistry';
-import { FileRecord } from './database/Schemas';
-import { formatFileSize } from './FormattingUtils';
+﻿import { Files, Folders } from '../database/ModelRegistry';
+import { FileRecord } from '../database/Schemas';
+import { formatFileSize } from '../FormattingUtils';
 import { WorkerPoolManager } from './WorkerPoolManager';
 import { route } from 'ziggy-js';
 
