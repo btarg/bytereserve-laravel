@@ -16,9 +16,10 @@ class File extends Model
         'user_id',
         'folder_id',
         'name',
-        'path', // This is now both the display path and S3 key
+        'path',
         'mime_type',
         'size',
+        'hash'
     ];
 
     public function user(): BelongsTo

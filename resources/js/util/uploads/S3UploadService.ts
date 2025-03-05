@@ -110,15 +110,16 @@ export class S3UploadService {
 
             // Create file record in local database
             const fileRecord: FileRecord = {
+                type: 'file',
                 id: data.id,
                 name: file.name,
-                type: 'file',
                 path: path,
                 folder_id: folderId,
                 mime_type: file.type || 'application/octet-stream',
                 size: file.size,
                 created_at: Date.now(),
-                updated_at: Date.now()
+                updated_at: Date.now(),
+                hash: file.name // TODO: implement hashing
             };
 
             // Save to Dexie
@@ -136,9 +137,9 @@ export class S3UploadService {
             // Create a pending file record for offline support
             try {
                 const fileRecord: FileRecord = {
+                    type: 'file',
                     id: `pending_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
                     name: file.name,
-                    type: 'file',
                     path: null,
                     folder_id: folderId,
                     mime_type: file.type || 'application/octet-stream',
@@ -146,7 +147,8 @@ export class S3UploadService {
                     local_blob: file, // Store blob for later upload
                     pending_upload: true,
                     created_at: Date.now(),
-                    updated_at: Date.now()
+                    updated_at: Date.now(),
+                    hash: file.name // TODO: implement hashing
                 };
 
                 // Save to Dexie

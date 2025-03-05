@@ -6,13 +6,13 @@ import {
     ShareIcon,
     FolderPlusIcon
 } from '@heroicons/vue/24/outline';
-import { FileItem } from '../../types';
+import { UIFileEntry } from '../../types';
 import { route } from 'ziggy-js';
 import { Files, Folders } from '@/util/database/ModelRegistry';
 import { storeNewFolder } from '@/util/uploads/FolderManagement';
 
 const props = defineProps<{
-    selectedItems: FileItem[];
+    selectedItems: UIFileEntry[];
     currentPath: string;
 }>();
 

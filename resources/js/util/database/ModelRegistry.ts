@@ -2,11 +2,11 @@ import { route } from 'ziggy-js';
 import dbService from './Database';
 import { DB_NAME, MODEL_DEFINITIONS } from './Schemas';
 
-// Initialize database
 export async function initializeDatabase() {
     console.log('Starting database initialization with version-controlled schema');
 
     try {
+        // Initialize the database structure
         await dbService.initialize(DB_NAME, MODEL_DEFINITIONS);
         console.log('Database initialized successfully');
 
@@ -19,9 +19,134 @@ export async function initializeDatabase() {
             }
         });
 
+        // Perform initial data load from server (always sync after fresh initialization)
+        // Check if database is empty first to avoid unnecessary syncs
+        const filesCount = await dbService.db.table('files').count();
+        const foldersCount = await dbService.db.table('folders').count();
+        
+        if (filesCount === 0 && foldersCount === 0) {
+            console.log('Empty database detected - performing initial data sync from server');
+            try {
+                // Force timestamp to 0 to get all data
+                await dbService.db.table('syncInfo').put({ key: 'lastSync', timestamp: 0 });
+                await dbService.syncAll();
+                console.log('Initial data sync completed');
+            } catch (syncError) {
+                console.error('Initial data sync failed:', syncError);
+                // Continue even if sync fails - app can retry later
+            }
+        }
+
         return dbService;
     } catch (error) {
         console.error('Failed to initialize database:', error);
+        throw error;
+    }
+}
+
+// Enhance getItemsByPath to better handle missing data scenarios
+export async function getItemsByPath(path: string, forceSync = false) {
+    if (!dbService.initialized || !dbService.db) {
+        throw new Error('Database not initialized');
+    }
+
+    try {
+        // Check if we need to sync with server
+        let shouldSync = forceSync;
+        
+        // If not explicitly syncing, check if we have data locally
+        if (!shouldSync) {
+            const filesCount = await dbService.db.table('files').count();
+            const foldersCount = await dbService.db.table('folders').count();
+            shouldSync = filesCount === 0 && foldersCount === 0;
+            
+            if (shouldSync) {
+                console.log('Empty local database detected, syncing with server...');
+            }
+        }
+        
+        // Sync if needed
+        if (shouldSync) {
+            try {
+                await dbService.syncAll();
+            } catch (error) {
+                console.warn('Failed to sync before fetching items, using cached data', error);
+            }
+        }
+        
+        // Rest of your existing function for retrieving items...
+        // For root path, get items with null folder_id/parent_id
+        if (path === '/') {
+            // Use filter function rather than equals() for null values
+            const [files, folders] = await Promise.all([
+                dbService.db.table('files')
+                    .filter(file => file.folder_id === null)
+                    .toArray(),
+                dbService.db.table('folders')
+                    .filter(folder => folder.parent_id === null)
+                    .toArray()
+            ]);
+            
+            // If we still have no data after sync, try one more time with force sync
+            if (files.length === 0 && folders.length === 0 && !forceSync) {
+                console.log('No items found locally, forcing server sync');
+                return getItemsByPath(path, true);
+            }
+            
+            return {
+                items: [
+                    ...files.map(file => ({ ...file, type: 'file' })),
+                    ...folders.map(folder => ({ ...folder, type: 'folder' }))
+                ],
+                current_folder_id: null
+            };
+        } else {
+            // Existing subfolder handling code...
+            const segments = path.split('/').filter(Boolean);
+            const folderName = segments[segments.length - 1];
+            
+            // Find the folder - first try by path
+            let currentFolder = await dbService.db.table('folders')
+                .filter(folder => folder.path === path || `/${folder.path}` === path)
+                .first();
+                
+            // If not found by path, try by name (less reliable but fallback)
+            if (!currentFolder) {
+                currentFolder = await dbService.db.table('folders')
+                    .filter(folder => folder.name === folderName)
+                    .first();
+            }
+            
+            if (!currentFolder && !forceSync) {
+                console.log(`Folder not found locally for path ${path}, forcing server sync`);
+                return getItemsByPath(path, true);
+            }
+            
+            if (!currentFolder) {
+                // If still not found after sync, return empty result
+                return { items: [], current_folder_id: null };
+            }
+            
+            // Rest of your existing code for retrieving subfolder items...
+            const [files, subfolders] = await Promise.all([
+                dbService.db.table('files')
+                    .filter(file => file.folder_id === currentFolder.id)
+                    .toArray(),
+                dbService.db.table('folders')
+                    .filter(folder => folder.parent_id === currentFolder.id)
+                    .toArray()
+            ]);
+            
+            return {
+                items: [
+                    ...files.map(file => ({ ...file, type: 'file' })),
+                    ...subfolders.map(folder => ({ ...folder, type: 'folder' }))
+                ],
+                current_folder_id: currentFolder.id
+            };
+        }
+    } catch (error) {
+        console.error('Error fetching items from IndexedDB:', error);
         throw error;
     }
 }
@@ -74,86 +199,6 @@ async function syncModel(modelName: string, syncEndpoint: string, lastSync: numb
         console.error(`Sync failed for ${modelName}:`, error);
         // Allow retrying later by returning current time
         return { timestamp: lastSync };
-    }
-}
-
-export async function getItemsByPath(path: string, forceSync = false) {
-    if (!dbService.initialized || !dbService.db) {
-        throw new Error('Database not initialized');
-    }
-
-    try {
-        // Only sync with server if explicitly requested
-        if (forceSync) {
-            try {
-                await dbService.syncAll();
-            } catch (error) {
-                console.warn('Failed to sync before fetching items, using cached data', error);
-            }
-        }
-        
-        // For root path, get items with null folder_id/parent_id
-        if (path === '/') {
-            // Use filter function rather than equals() for null values
-            const [files, folders] = await Promise.all([
-                dbService.db.table('files')
-                    .filter(file => file.folder_id === null)
-                    .toArray(),
-                dbService.db.table('folders')
-                    .filter(folder => folder.parent_id === null)
-                    .toArray()
-            ]);
-            
-            return {
-                items: [
-                    ...files.map(file => ({ ...file, type: 'file' })),
-                    ...folders.map(folder => ({ ...folder, type: 'folder' }))
-                ],
-                current_folder_id: null
-            };
-        } else {
-            // For subfolder, first find the folder by its path
-            const segments = path.split('/').filter(Boolean);
-            const folderName = segments[segments.length - 1];
-            
-            // Find the folder - first try by path
-            let currentFolder = await dbService.db.table('folders')
-                .filter(folder => folder.path === path || `/${folder.path}` === path)
-                .first();
-                
-            // If not found by path, try by name (less reliable but fallback)
-            if (!currentFolder) {
-                currentFolder = await dbService.db.table('folders')
-                    .filter(folder => folder.name === folderName)
-                    .first();
-            }
-            
-            if (!currentFolder) {
-                // If not found locally, return empty result
-                return { items: [], current_folder_id: null };
-            }
-            
-            // Get files and subfolders for this folder using filter instead of equals for stability
-            const [files, subfolders] = await Promise.all([
-                dbService.db.table('files')
-                    .filter(file => file.folder_id === currentFolder.id)
-                    .toArray(),
-                dbService.db.table('folders')
-                    .filter(folder => folder.parent_id === currentFolder.id)
-                    .toArray()
-            ]);
-            
-            return {
-                items: [
-                    ...files.map(file => ({ ...file, type: 'file' })),
-                    ...subfolders.map(folder => ({ ...folder, type: 'folder' }))
-                ],
-                current_folder_id: currentFolder.id
-            };
-        }
-    } catch (error) {
-        console.error('Error fetching items from IndexedDB:', error);
-        throw error;
     }
 }
 

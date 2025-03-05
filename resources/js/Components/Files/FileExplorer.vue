@@ -1,12 +1,12 @@
 ﻿<script setup lang="ts">
 import { ref, onMounted } from 'vue';
-import { FileItem } from '../../types.ts';
+import { UIFileEntry } from '../../types.ts';
 import FileList from './FileList.vue';
 import FileToolbar from './FileToolbar.vue';
 import Breadcrumb from './Breadcrumb.vue';
 
 const currentPath = ref('/');
-const selectedItems = ref<FileItem[]>([]);
+const selectedItems = ref<UIFileEntry[]>([]);
 const fileListRef = ref<InstanceType<typeof FileList> | null>(null);
 
 const refreshFileList = (forceSync = false) => {
@@ -34,7 +34,7 @@ const handlePathChange = (newPath: string) => {
     history.pushState({}, '', url);
 };
 
-const handleSelectionChange = (items: FileItem[]) => {
+const handleSelectionChange = (items: UIFileEntry[]) => {
     selectedItems.value = items;
 };
 </script>

@@ -1,5 +1,5 @@
 import Dexie, { IndexableType } from 'dexie';
-import { DB_VERSION, SCHEMAS } from './Schemas';
+import { LATEST_VERSIONS, SCHEMAS } from './Schemas';
 
 // Define types for our database operations
 interface SyncInfo {
@@ -61,33 +61,53 @@ class DatabaseService {
      */
     async initialize(dbName: string, modelDefinitions: ModelDefinitions): Promise<Dexie> {
         if (this.initialized && this.db) return this.db;
-    
+
+        // Get the overall DB version (highest of all table versions)
+        const OVERALL_DB_VERSION = Math.max(...Object.values(LATEST_VERSIONS));
+
         try {
             this.modelDefinitions = modelDefinitions;
             this.db = new Dexie(dbName);
-        
-            const stores: { [key: string]: string } = {};
-            Object.entries(modelDefinitions).forEach(([modelName, definition]) => {
-                stores[modelName] = definition.schema;
-            });
 
-            // Add sync info table
-            stores.syncInfo = SCHEMAS.syncInfo;
+            // Handle each version sequentially
+            for (let version = 1; version <= OVERALL_DB_VERSION; version++) {
+                const versionStores: { [key: string]: string } = {};
 
-            // Define the database schema using the centralized schema definitions
-            this.db.version(DB_VERSION).stores(stores);
-        
-            // Initialize database
+                // For each model, get the appropriate schema for this version
+                Object.entries(SCHEMAS).forEach(([tableName, tableSchemas]) => {
+                    if (tableName === 'syncInfo') {
+                        versionStores[tableName] = tableSchemas as string; // Not versioned
+                        return;
+                    }
+
+                    // Get the highest schema version that doesn't exceed current version
+                    const applicableVersions = Object.keys(tableSchemas)
+                        .map(v => parseInt(v))
+                        .filter(v => v <= version)
+                        .sort((a, b) => b - a);
+
+                    if (applicableVersions.length > 0) {
+                        const schemaVersion = applicableVersions[0];
+                        versionStores[tableName] = tableSchemas[schemaVersion];
+                    }
+                });
+
+                // Define this version of the schema
+                this.db.version(version).stores(versionStores);
+                // console.log(`Defined schema version ${version}:`, versionStores);
+            }
+
+            // Rest of initialization...
             console.log('Opening database connection...');
             await this.db.open();
-            console.log('Database opened successfully.');
-            
+            console.log('Database opened successfully with version:', this.db.verno);
+
             // Initialize sync timestamp if not exists
             const syncInfo = await this.db.table('syncInfo').get('lastSync') as SyncInfo | undefined;
             if (!syncInfo) {
                 await this.db.table('syncInfo').put({ key: 'lastSync', timestamp: 0 });
             }
-        
+
             this.initialized = true;
             return this.db;
         } catch (error) {

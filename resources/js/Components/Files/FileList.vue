@@ -1,6 +1,6 @@
 ﻿<script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, defineProps, defineEmits } from 'vue';
-import { FileItem } from '../../types';
+import { UIFileEntry } from '../../types';
 import { getItemsByPath } from '@/util/database/ModelRegistry';
 
 
@@ -15,21 +15,20 @@ import { S3UploadService } from "@/util/uploads/S3UploadService";
 import { useToast } from "vue-toastification";
 import { route } from 'ziggy-js';
 import { formatFileSize } from '@/util/FormattingUtils';
-
 const toast = useToast();
 const props = defineProps<{
     currentPath: string;
 }>();
 
 const emit = defineEmits<{
-    (e: 'selection-change', items: FileItem[]): void;
+    (e: 'selection-change', items: UIFileEntry[]): void;
     (e: 'path-change', path: string): void;
 }>();
 
 const isDragging = ref(false);
 const isLoading = ref(false);
-const selectedItems = ref<FileItem[]>([]);
-const files = ref<FileItem[]>([]);
+const selectedItems = ref<UIFileEntry[]>([]);
+const uiFileEntries = ref<UIFileEntry[]>([]);
 const currentFolderId = ref<number | null>(null);
 const downloading = ref<Record<number, boolean>>({});
 
@@ -49,9 +48,8 @@ defineExpose({
     refreshFiles
 });
 
-const handleItemClick = async (item: FileItem) => {
+const handleItemClick = async (item: UIFileEntry) => {
     if (item.type === 'folder') {
-        // Navigate to the folde
         navigateToFolder(item.path);
     } else {
         await downloadFile(item);
@@ -69,7 +67,7 @@ const navigateToFolder = (folderPath: string) => {
     history.pushState({}, '', url);
 };
 
-const downloadFile = async (item: FileItem) => {
+const downloadFile = async (item: UIFileEntry) => {
     if (!item.id) {
         toast.error("Cannot download file: Missing file ID");
         return;
@@ -94,9 +92,9 @@ const downloadFile = async (item: FileItem) => {
                 const url = new URL(data.download_url);
                 const amzDate = url.searchParams.get('X-Amz-Date');
                 const amzExpires = url.searchParams.get('X-Amz-Expires');
-                
+
                 let isExpired = false;
-                
+
                 if (amzDate && amzExpires) {
                     // Parse the date and expiration time
                     // Format: YYYYMMDDTHHMMSSZ (ISO 8601 format)
@@ -106,16 +104,16 @@ const downloadFile = async (item: FileItem) => {
                     const hour = parseInt(amzDate.substring(9, 11));
                     const minute = parseInt(amzDate.substring(11, 13));
                     const second = parseInt(amzDate.substring(13, 15));
-                    
+
                     const dateObj = new Date(Date.UTC(year, month, day, hour, minute, second));
                     const expiresInSeconds = parseInt(amzExpires);
                     const expirationTime = new Date(dateObj.getTime() + expiresInSeconds * 1000);
-                    
+
                     // Check if the URL has expired
                     isExpired = new Date() > expirationTime;
                     console.log(`URL expiration check: Current time: ${new Date().toISOString()}, Expires: ${expirationTime.toISOString()}, Expired: ${isExpired}`);
                 }
-                
+
                 if (!isExpired) {
                     // URL is still valid, proceed with download
                     const link = document.createElement('a');
@@ -128,15 +126,15 @@ const downloadFile = async (item: FileItem) => {
                 } else {
                     // URL has expired, get a fresh one
                     console.log("Download link expired, generating a new one...");
-                    
+
                     const newLinkResponse = await window.cacheFetch.get(
-                        route('files.download.{file}', { file: item.id }), 
+                        route('files.download.{file}', { file: item.id }),
                         {},
                         { cacheStrategy: 'network-only' }
                     );
-                    
+
                     const newData = await newLinkResponse.json();
-                    
+
                     if (newData.download_url) {
                         const link = document.createElement('a');
                         link.href = newData.download_url;
@@ -151,7 +149,7 @@ const downloadFile = async (item: FileItem) => {
                 }
             } catch (error) {
                 console.error('Error processing download URL:', error);
-                
+
                 // If URL parsing fails, try direct download as a fallback
                 console.log("Attempting direct download as fallback...");
                 const link = document.createElement('a');
@@ -215,9 +213,10 @@ const fetchItems = async (forceSync = false) => {
         }
 
         // Map the items to our expected format
-        files.value = data.items.map(item => {
+        uiFileEntries.value = data.items.map(item => {
             // For folders, create the correct path
             let itemPath = '';
+
             if (item.type === 'folder') {
                 // Use the path from the database if available, otherwise construct it
                 itemPath = item.path || `${props.currentPath === '/' ? '' : props.currentPath}/${item.name}`;
@@ -244,7 +243,7 @@ const fetchItems = async (forceSync = false) => {
     } catch (error) {
         console.error('Error fetching files:', error);
         toast.error("Failed to load files. Please try again.");
-        files.value = []; // Reset files on error
+        uiFileEntries.value = []; // Reset files on error
     } finally {
         isLoading.value = false;
     }
@@ -252,7 +251,7 @@ const fetchItems = async (forceSync = false) => {
 
 
 // Selection handling
-const toggleSelection = (item: FileItem) => {
+const toggleSelection = (item: UIFileEntry) => {
     const index = selectedItems.value.findIndex(i => i.id === item.id);
     if (index === -1) {
         selectedItems.value.push(item);
@@ -262,7 +261,7 @@ const toggleSelection = (item: FileItem) => {
     emit('selection-change', selectedItems.value);
 };
 
-const isSelected = (item: FileItem): boolean => {
+const isSelected = (item: UIFileEntry): boolean => {
     return selectedItems.value.some(i => i.id === item.id);
 };
 
@@ -411,25 +410,25 @@ onUnmounted(() => {
                 <div class="col-span-3">Size</div>
             </div>
 
-            <div v-if="files.length === 0" class="py-12 text-center text-gray-500">
+            <div v-if="uiFileEntries.length === 0" class="py-12 text-center text-gray-500">
                 No files or folders in this location. Drop files to upload.
             </div>
 
-            <div v-for="item in files" :key="item.id"
+            <div v-for="entry in uiFileEntries" :key="entry.id"
                 class="grid grid-cols-12 gap-4 px-4 py-3 rounded-lg hover:bg-gray-50 cursor-pointer"
-                :class="{ 'bg-blue-50': isSelected(item) }" @click="toggleSelection(item)">
+                :class="{ 'bg-blue-50': isSelected(entry) }" @click="toggleSelection(entry)">
                 <div class="col-span-6 flex items-center space-x-3">
-                    <CheckCircleIcon class="w-5 h-5" :class="isSelected(item) ? 'text-blue-500' : 'text-gray-200'" />
-                    <div class="flex items-center" @click.stop="handleItemClick(item)">
-                        <FolderIcon v-if="item.type === 'folder'" class="w-5 h-5 text-yellow-500" />
+                    <CheckCircleIcon class="w-5 h-5" :class="isSelected(entry) ? 'text-blue-500' : 'text-gray-200'" />
+                    <div class="flex items-center" @click.stop="handleItemClick(entry)">
+                        <FolderIcon v-if="entry.type === 'folder'" class="w-5 h-5 text-yellow-500" />
                         <DocumentIcon v-else class="w-5 h-5 text-blue-500" />
-                        <span class="truncate ml-3">{{ item.name }}</span>
+                        <span class="truncate ml-3">{{ entry.name }}</span>
                     </div>
                 </div>
                 <div class="col-span-3 flex items-center">
-                    {{ item.modified_at.toLocaleDateString() }}
+                    {{ entry.modified_at.toLocaleDateString() }}
                 </div>
-                <div class="col-span-3 flex items-center">{{ formatFileSize(item.size) }}</div>
+                <div class="col-span-3 flex items-center">{{ formatFileSize(entry.size) }}</div>
             </div>
 
             <!-- Drop zone overlay -->
