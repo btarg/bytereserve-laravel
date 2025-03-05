@@ -1,8 +1,7 @@
-﻿<!-- filepath: /c:/Users/BenTa/Documents/Laravel/chirper/resources/js/Components/Files/FileList.vue -->
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, defineProps, defineEmits } from 'vue';
 import { FileItem } from '../../types';
-import { getItemsByPath, Files, Folders } from '@/util/database/ModelRegistry';
+import { getItemsByPath } from '@/util/database/ModelRegistry';
 
 
 import {
@@ -16,7 +15,6 @@ import { S3UploadService } from "@/util/S3UploadService";
 import { useToast } from "vue-toastification";
 import { route } from 'ziggy-js';
 import { formatFileSize } from '@/util/FormattingUtils';
-import { FileRecord } from '@/util/database/Schemas';
 
 const toast = useToast();
 const props = defineProps<{
@@ -84,8 +82,7 @@ const downloadFile = async (item: FileItem) => {
         const response = await window.cacheFetch.get(
             route('files.download.{file}', { file: item.id }),
             {},
-            {},
-            true // Enable retryOnError to get fresh data if needed
+            {}
         );
 
         const data = await response.json();
@@ -310,60 +307,15 @@ async function processFile(file: File) {
         // Start timing the upload
         const startTime = performance.now();
 
-        // First save to Dexie with a temporary ID
-        const tempId = 'temp_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-        const fileRecord: FileRecord = {
-            id: tempId,
-            name: file.name,
-            type: 'file',
-            path: tempId, // Will be replaced with S3 key after upload
-            folder_id: currentFolderId.value,
-            mime_type: file.type || 'application/octet-stream',
-            size: file.size,
-            local_blob: file, // Store the file blob locally for later upload
-            pending_upload: true,
-            created_at: Date.now(),
-            updated_at: Date.now()
-        };
-
-        // Save to Dexie
-        await Files().save(fileRecord);
-
-        let result;
-
+        // Try to upload to S3
+        let result = null;
         try {
-            // Try to upload to S3
             result = await uploadService.uploadFile(file, "password", currentFolderId.value, (progress) => {
                 uploadProgress.value[fileId] = progress;
             });
-
-            // If successful, update the record with real ID and S3 path
-            if (result && result.id) {
-                // Delete the temporary record
-                await Files().delete(tempId);
-
-                // The server should have already created the record, but we'll update local DB
-                const serverRecord: FileRecord = {
-                    id: result.id,
-                    name: result.name,
-                    type: 'file',
-                    path: result.path,
-                    folder_id: currentFolderId.value,
-                    mime_type: result.mime_type,
-                    size: result.size,
-                    created_at: Date.now(),
-                    updated_at: Date.now()
-                };
-
-                await Files().save(serverRecord);
-
-                // Then force fetch with the latest data including updated folder sizes
-                await fetchItems(true);
-            }
         } catch (uploadError) {
-            console.error('Upload failed, file will be saved locally:', uploadError);
-            // Keep the local record with pending_upload flag
-            // Will be uploaded later when connection is available
+            console.error('Upload failed:', uploadError);
+            // Will handle this case below
         }
 
         // Calculate upload duration
@@ -371,14 +323,18 @@ async function processFile(file: File) {
         const duration = (endTime - startTime) / 1000; // Convert to seconds
 
         uploadsInProgress.value--;
-        console.log(`Upload completed: ${file.name} (${formatFileSize(file.size)}) in ${duration.toFixed(2)}s`);
-        toast.success(`Uploaded ${file.name} in ${duration.toFixed(2)}s`);
 
-        return result || fileRecord; // Return either S3 result or local record
+        if (result) {
+            toast.success(`Uploaded ${file.name} in ${duration.toFixed(2)}s`);
+        } else {
+            toast.info(`${file.name} saved locally and will upload when connection is available`);
+        }
+
+        return result;
     } catch (error) {
         uploadsInProgress.value--;
-        console.error('File upload failed:', error);
-        toast.error(`Failed to upload ${file.name}`);
+        console.error('File processing failed:', error);
+        toast.error(`Failed to process ${file.name}`);
         return null;
     }
 }
