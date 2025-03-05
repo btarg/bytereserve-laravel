@@ -50,14 +50,19 @@ function workerDevPlugin() {
     };
 }
 
+const codespacesDomain = process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN
+const codespaceName = process.env.CODESPACE_NAME || 'laravel-vite';
+
 export default defineConfig({
     server: {
         // Allow connections from any IP
-        host: 'localhost',
-        // Correctly handle HMR in container
-        hmr: {
-            host: 'localhost'
-        },
+        host: '0.0.0.0',
+        // Correctly handle HMR in Codespaces
+        hmr: codespacesDomain ? {
+            host: `${codespaceName}-5173.${codespacesDomain}`,
+            protocol: 'wss',
+            clientPort: 443
+        } : true,
     },
     plugins: [
         laravel({

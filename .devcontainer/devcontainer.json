@@ -1,40 +1,49 @@
 {
-    "name": "Laravel Development (SQLite)",
+    "name": "Debian",
     "build": {
-        "dockerfile": "Dockerfile"
-    },
-    "features": {
-        "ghcr.io/devcontainers/features/node:1": {
-            "version": "lts"
+        "dockerfile": "Dockerfile",
+        "args": {
+            "INSTALL_ZSH": "true",
+            "USER_UID": "1000",
+            "USER_GID": "1000"
         }
     },
-    "portsAttributes": {
-        "8000": {
-            "label": "Laravel Application",
-            "onAutoForward": "openBrowser"
-        },
-        "5173": {
-            "label": "Vite Dev Server"
-        },
-        "3306": {
-            "label": "Database"
-        }
-    },
+    "workspaceFolder": "/home/vscode/project",
+    "workspaceMount": "source=${localWorkspaceFolder},target=/home/vscode/project,type=bind,consistency=delegated",
+    "runArgs": [
+        "--init",
+        "--privileged"
+    ],
     "forwardPorts": [
         8000,
-        5173,
-        3306
+        5173
     ],
-    "postCreateCommand": "chmod +x ./fix-sqlite-permissions.sh && sudo ./fix-sqlite-permissions.sh && composer update && npm install && php artisan key:generate && php artisan migrate",
-    "remoteUser": "vscode",
     "customizations": {
+        "settings": {
+            "terminal.integrated.defaultProfile.linux": "zsh"
+        },
         "vscode": {
             "extensions": [
-                "bmewburn.vscode-intelephense-client",
-                "xdebug.php-debug",
+                // Helps with tailwind css class completion
+                "bradlc.vscode-tailwindcss",
+                // Nice quality of life when it comes to vue
+                "znck.vue",
                 "Vue.volar",
-                "bradlc.vscode-tailwindcss"
+                // Used for PHP debugging
+                "xdebug.php-debug",
+                "bmewburn.vscode-intelephense-client"
             ]
         }
+    },
+    "remoteUser": "vscode",
+    "features": {
+        "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+        "ghcr.io/devcontainers/features/php:1": {
+            "installComposer": true
+        },
+        "ghcr.io/devcontainers/features/node:1": {}
+    },
+    "containerEnv": {
+        "APP_PORT": "8000"
     }
 }
