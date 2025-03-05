@@ -215,12 +215,12 @@ class FileExplorerController extends Controller
                 return response()->json(['error' => 'Unauthorized'], 403);
             }
 
-            // Cache the download URL for this file
             $cacheKey = "file_download_{$file->id}";
+            $cacheMinutes = env('PRESIGNED_URL_CACHE_MINUTES', 15);
 
-            return Cache::remember($cacheKey, now()->addMinutes(5), function () use ($file) {
+            return Cache::remember($cacheKey, now()->addMinutes($cacheMinutes), function () use ($file, $cacheMinutes) {
                 // Generate a presigned URL for the file
-                $downloadUrl = $file->getPresignedUrl(15); // 15 minutes expiry
+                $downloadUrl = $file->getPresignedUrl($cacheMinutes);
 
                 return response()->json([
                     'download_url' => $downloadUrl,
