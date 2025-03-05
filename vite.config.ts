@@ -51,12 +51,12 @@ function workerDevPlugin() {
 }
 
 const codespacesDomain = process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN
-const codespaceName = process.env.CODESPACE_NAME || 'laravel-vite';
+const codespaceName = process.env.CODESPACE_NAME;
 
 export default defineConfig({
     server: {
         // Allow connections from any IP
-        host: '0.0.0.0',
+        host: codespaceName ? '0.0.0.0' : 'localhost',
         // Correctly handle HMR in Codespaces
         hmr: codespacesDomain ? {
             host: `${codespaceName}-5173.${codespacesDomain}`,
