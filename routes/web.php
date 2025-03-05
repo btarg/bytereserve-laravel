@@ -69,8 +69,6 @@ Route::prefix('api/uploads')->group(function () {
         ->name('uploads.complete-multipart');
     Route::post('/multipart/abort', [S3UploadController::class, 'abortMultipartUpload'])
         ->name('uploads.abort-multipart');
-    Route::post('/details', [S3UploadController::class, 'getFileDetails'])
-        ->name('uploads.details');
 });
 
 Route::prefix('api')->middleware('auth')->group(function () {

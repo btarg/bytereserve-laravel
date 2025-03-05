@@ -181,9 +181,14 @@ export class S3UploadService {
                 throw new Error(`Failed to upload file: ${uploadResponse.statusText}`);
             }
 
-            const detailsResponse = await window.cacheFetch.post(route('uploads.details'), { key });
-            const detailsData = await detailsResponse.json();
-            return { ...detailsData, key };
+            const fileDetails = {
+                key: key,
+                contentType: file.type || 'application/octet-stream',
+                contentLength: file.size,
+                lastModified: new Date().toISOString(),
+            };
+
+            return fileDetails;
         } catch (error) {
             console.error('Direct upload failed:', error);
             throw error;
@@ -492,16 +497,6 @@ export class S3UploadService {
             };
 
             metrics.completeTime = performance.now() - completeStart;
-
-            if (!data.location) {
-                const detailsResponse = await window.cacheFetch.post(route('uploads.details'), { key });
-                const detailsData = await detailsResponse.json();
-                if (detailsData.url) {
-                    data.location = detailsData.url;
-                } else {
-                    throw new Error('No URL returned from S3 complete endpoint');
-                }
-            }
 
             if (progressCallback) {
                 progressCallback(100);
