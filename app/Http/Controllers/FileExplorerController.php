@@ -216,7 +216,7 @@ class FileExplorerController extends Controller
             }
 
             $cacheKey = "file_download_{$file->id}";
-            $cacheMinutes = env('PRESIGNED_URL_CACHE_MINUTES', 15);
+            $cacheMinutes = (int)env('PRESIGNED_URL_CACHE_MINUTES', 15);
 
             return Cache::remember($cacheKey, now()->addMinutes($cacheMinutes), function () use ($file, $cacheMinutes) {
                 // Generate a presigned URL for the file
