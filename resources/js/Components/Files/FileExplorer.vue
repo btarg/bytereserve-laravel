@@ -4,6 +4,10 @@ import { UIFileEntry } from '../../types.ts';
 import FileList from './FileList.vue';
 import FileToolbar from './FileToolbar.vue';
 import Breadcrumb from './Breadcrumb.vue';
+import { useDarkMode } from '@/composables/useDarkMode';
+import { MoonIcon, SunIcon } from '@heroicons/vue/24/outline';
+
+const { isDarkMode, toggleDarkMode } = useDarkMode();
 
 const currentPath = ref('/');
 const selectedItems = ref<UIFileEntry[]>([]);
@@ -46,25 +50,43 @@ const handleUploadFiles = (files: FileList, config: any) => {
 </script>
 
 <template>
-    <div class="h-screen bg-gray-50">
+    <div class="h-screen bg-gray-50 dark:bg-gray-900 transition-colors duration-200">
         <div class="flex flex-col h-full">
             <!-- Header -->
-            <header class="bg-white border-b border-gray-200 px-6 py-4">
-                <h1 class="text-2xl font-semibold text-gray-800">Files</h1>
+            <header class="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4 transition-colors duration-200">
+                <div class="flex justify-between items-center">
+                    <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Files</h1>
+                    
+                    <!-- Dark mode toggle -->
+                    <button 
+                        @click="toggleDarkMode"
+                        class="p-2 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors duration-200"
+                        :title="isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'"
+                    >
+                        <SunIcon v-if="isDarkMode" class="w-5 h-5 text-yellow-500" />
+                        <MoonIcon v-else class="w-5 h-5 text-gray-600" />
+                    </button>
+                </div>
             </header>
 
             <!-- Main content -->
-            <div class="flex-1 flex">
-                
-
+            <div class="flex-1 flex overflow-hidden">
                 <!-- Main content area -->
                 <main class="flex-1 flex flex-col">
-                    <FileToolbar :selected-items="selectedItems" :current-path="currentPath"
-                        @path-change="handlePathChange" @refresh-files="(forceSync) => refreshFileList(forceSync)" 
-                        @upload-files="handleUploadFiles" />
+                    <FileToolbar 
+                        :selected-items="selectedItems" 
+                        :current-path="currentPath"
+                        @path-change="handlePathChange" 
+                        @refresh-files="(forceSync) => refreshFileList(forceSync)" 
+                        @upload-files="handleUploadFiles" 
+                    />
                     <Breadcrumb :current-path="currentPath" @path-change="handlePathChange" />
-                    <FileList ref="fileListRef" :current-path="currentPath" @selection-change="handleSelectionChange"
-                        @path-change="handlePathChange" />
+                    <FileList 
+                        ref="fileListRef" 
+                        :current-path="currentPath" 
+                        @selection-change="handleSelectionChange"
+                        @path-change="handlePathChange" 
+                    />
                 </main>
             </div>
         </div>

@@ -184,64 +184,76 @@ const handleUploadCancel = () => {
 </script>
 
 <template>
-    <div class="bg-white border-b border-gray-200 p-4">
-        <div class="flex items-center space-x-4">
-            <!-- New Folder Button -->
-            <button v-if="!isCreatingFolder" @click="isCreatingFolder = true"
-                class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
-                <FolderPlusIcon class="w-5 h-5 mr-2" />
-                New Folder
-            </button>
-
-            <!-- New Folder Form -->
-            <form v-else @submit.prevent="createNewFolder" class="flex items-center space-x-2">
-                <input type="text" ref="newFolderInput" v-model="newFolderName" placeholder="Enter folder name"
-                    class="block w-64 rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                    autoFocus />
-                <button type="submit"
-                    class="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none">
-                    Create
+    <div class="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-4 transition-colors duration-200">
+        <div class="flex items-center justify-between">
+            <div class="flex items-center space-x-4">
+                <!-- New Folder Button -->
+                <button v-if="!isCreatingFolder" @click="isCreatingFolder = true"
+                    class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg shadow-sm text-white bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 dark:focus:ring-offset-gray-800 transition-colors duration-200">
+                    <FolderPlusIcon class="w-5 h-5 mr-2" />
+                    New Folder
                 </button>
-                <button type="button" @click="isCreatingFolder = false"
-                    class="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md bg-white hover:bg-gray-50 focus:outline-none">
-                    Cancel
+
+                <!-- New Folder Form -->
+                <form v-else @submit.prevent="createNewFolder" class="flex items-center space-x-2">
+                    <input type="text" ref="newFolderInput" v-model="newFolderName" placeholder="Enter folder name"
+                        class="block w-64 rounded-lg border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:focus:border-blue-400 dark:focus:ring-blue-400 sm:text-sm transition-colors duration-200"
+                        autoFocus />
+                    <button type="submit"
+                        class="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-lg shadow-sm text-white bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 focus:outline-none transition-colors duration-200">
+                        Create
+                    </button>
+                    <button type="button" @click="isCreatingFolder = false"
+                        class="inline-flex items-center px-3 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none transition-colors duration-200">
+                        Cancel
+                    </button>
+                </form>
+
+                <!-- Upload Button -->
+                <button @click="triggerFileUpload"
+                    class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg shadow-sm text-white bg-green-600 hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 dark:focus:ring-offset-gray-800 transition-colors duration-200">
+                    <ArrowUpTrayIcon class="w-5 h-5 mr-2" />
+                    Upload Files
                 </button>
-            </form>
 
-            <!-- Upload Button -->
-            <button @click="triggerFileUpload"
-                class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">
-                <ArrowUpTrayIcon class="w-5 h-5 mr-2" />
-                Upload Files
-            </button>
+                <!-- Hidden file input -->
+                <input
+                    ref="fileInput"
+                    type="file"
+                    multiple
+                    @change="handleFileSelection"
+                    class="hidden"
+                />
+            </div>
+            
+            <div class="flex items-center space-x-3">
+                <!-- Download Button -->
+                <button :disabled="selectedItems.filter(item => item.type === 'file').length === 0"
+                    @click="downloadSelectedFiles"
+                    class="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-lg text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 dark:focus:ring-offset-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200">
+                    <template v-if="downloading">
+                        <span
+                            class="animate-spin h-5 w-5 mr-2 border-2 border-blue-500 dark:border-blue-400 rounded-full border-t-transparent"></span>
+                    </template>
+                    <ArrowDownTrayIcon v-else class="w-5 h-5 mr-2" />
+                    Download
+                    <span v-if="selectedItems.filter(item => item.type === 'file').length > 0" 
+                          class="ml-1 px-2 py-1 text-xs bg-gray-100 dark:bg-gray-600 text-gray-600 dark:text-gray-300 rounded-full">
+                        {{ selectedItems.filter(item => item.type === 'file').length }}
+                    </span>
+                </button>
 
-            <!-- Hidden file input -->
-            <input
-                ref="fileInput"
-                type="file"
-                multiple
-                @change="handleFileSelection"
-                class="hidden"
-            />
-
-            <!-- Download Button -->
-            <button :disabled="selectedItems.filter(item => item.type === 'file').length === 0"
-                @click="downloadSelectedFiles"
-                class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed">
-                <template v-if="downloading">
-                    <span
-                        class="animate-spin h-5 w-5 mr-2 border-2 border-blue-500 rounded-full border-t-transparent"></span>
-                </template>
-                <ArrowDownTrayIcon v-else class="w-5 h-5 mr-2" />
-                Download ({{ selectedItems.filter(item => item.type === 'file').length }})
-            </button>
-
-            <!-- Delete Button -->
-            <button :disabled="selectedItems.length === 0" @click="deleteSelectedItems"
-                class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed">
-                <TrashIcon class="w-5 h-5 mr-2" />
-                Delete
-            </button>
+                <!-- Delete Button -->
+                <button :disabled="selectedItems.length === 0" @click="deleteSelectedItems"
+                    class="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-lg text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 dark:focus:ring-offset-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200 hover:text-red-600 dark:hover:text-red-400 hover:border-red-300 dark:hover:border-red-600">
+                    <TrashIcon class="w-5 h-5 mr-2" />
+                    Delete
+                    <span v-if="selectedItems.length > 0" 
+                          class="ml-1 px-2 py-1 text-xs bg-gray-100 dark:bg-gray-600 text-gray-600 dark:text-gray-300 rounded-full">
+                        {{ selectedItems.length }}
+                    </span>
+                </button>
+            </div>
         </div>
 
         <!-- Upload Configuration Modal -->

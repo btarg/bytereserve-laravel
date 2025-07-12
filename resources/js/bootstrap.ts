@@ -2,6 +2,24 @@ import { initializeDatabase } from './util/database/ModelRegistry';
 import syncService from './util/database/SyncService';
 import cacheFetchInstance, { AutoCacheableFetch } from "./util/AutoCacheableFetch";
 
+// Initialize dark mode from localStorage or system preference
+const initializeDarkMode = () => {
+    const stored = localStorage.getItem('darkMode');
+    if (stored !== null) {
+        if (stored === 'true') {
+            document.documentElement.classList.add('dark');
+        }
+    } else {
+        // Check system preference
+        if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            document.documentElement.classList.add('dark');
+        }
+    }
+};
+
+// Initialize dark mode immediately
+initializeDarkMode();
+
 // Initialize database with retry logic
 function initWithRetry(retries = 3, delay = 1000) {
     return initializeDatabase()

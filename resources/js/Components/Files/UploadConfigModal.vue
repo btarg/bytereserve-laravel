@@ -1,14 +1,14 @@
 <template>
     <div v-if="show" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click="handleBackdropClick">
-        <div class="bg-white rounded-lg p-6 w-96 max-w-md mx-4" @click.stop>
+        <div class="bg-white dark:bg-gray-800 rounded-lg p-6 w-96 max-w-md mx-4 border border-gray-200 dark:border-gray-700" @click.stop>
             <div class="flex items-center justify-between mb-4">
                 <div class="flex items-center">
-                    <svg class="w-6 h-6 text-blue-500 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg class="w-6 h-6 text-blue-500 dark:text-blue-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                     </svg>
-                    <h3 class="text-lg font-semibold text-gray-900">Upload Configuration</h3>
+                    <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Upload Configuration</h3>
                 </div>
-                <button @click="handleCancel" class="text-gray-400 hover:text-gray-600">
+                <button @click="handleCancel" class="text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300">
                     <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                     </svg>
@@ -16,7 +16,7 @@
             </div>
             
             <div class="mb-4">
-                <p class="text-sm text-gray-700 mb-4">
+                <p class="text-sm text-gray-700 dark:text-gray-300 mb-4">
                     Configure encryption and expiry settings for your files.
                 </p>
                 
@@ -26,20 +26,20 @@
                         <input
                             type="checkbox"
                             v-model="useEncryption"
-                            class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-700 text-blue-600 focus:ring-blue-500 dark:focus:ring-blue-400"
                         />
-                        <span class="ml-2 text-sm font-medium text-gray-700">
+                        <span class="ml-2 text-sm font-medium text-gray-700 dark:text-gray-300">
                             Encrypt files
                         </span>
                     </label>
-                    <p class="text-xs text-gray-500 mt-1">
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
                         Files will be encrypted before upload. Leave unchecked to upload without encryption.
                     </p>
                 </div>
 
                 <!-- Encryption Key Input -->
                 <div v-if="useEncryption" class="mb-6">
-                    <label for="encryptionKey" class="block text-sm font-medium text-gray-700 mb-2">
+                    <label for="encryptionKey" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                         Encryption Key
                     </label>
                     <input

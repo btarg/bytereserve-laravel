@@ -17,6 +17,7 @@ import EncryptionKeyModal from "./EncryptionKeyModal.vue";
 import ShareModal from "./ShareModal.vue";
 import FileTypeIcon from "./FileTypeIcon.vue";
 import UploadConfigModal from "./UploadConfigModal.vue";
+import FileShareBadge from "./FileShareBadge.vue";
 import { useToast } from "vue-toastification";
 import { route } from 'ziggy-js';
 import { formatFileSize } from '@/util/FormattingUtils';
@@ -729,88 +730,144 @@ onUnmounted(() => {
 </script>
 
 <template>
-    <div class="flex-1 overflow-auto p-6" :class="{ 'border-2 border-dashed border-blue-400 bg-blue-50': isDragging }">
+    <div class="flex-1 overflow-auto p-6 bg-white dark:bg-gray-900 transition-colors duration-200" 
+         :class="{ 'border-2 border-dashed border-blue-400 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-500': isDragging }">
+        
+        <!-- Loading state -->
         <div v-if="isLoading" class="flex justify-center p-12">
-            <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-500"></div>
+            <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-500 dark:border-blue-400"></div>
         </div>
 
-        <div v-else class="grid grid-cols-1 gap-2">
-            <div class="grid grid-cols-12 gap-4 px-4 py-2 text-sm font-medium text-gray-500 bg-gray-50 rounded-lg">
-                <div class="col-span-6">Name</div>
-                <div class="col-span-3">Modified</div>
-                <div class="col-span-3">Size</div>
+        <!-- File list -->
+        <div v-else class="space-y-1">
+            <!-- Header -->
+            <div class="grid grid-cols-12 gap-4 px-4 py-3 text-sm font-medium text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+                <div class="col-span-5">Name</div>
+                <div class="col-span-2">Share</div>
+                <div class="col-span-2">Modified</div>
+                <div class="col-span-2">Size</div>
+                <div class="col-span-1">Actions</div>
             </div>
 
-            <div v-if="uiFileEntries.length === 0" class="py-12 text-center text-gray-500">
-                No files or folders in this location. Drop files to upload.
+            <!-- Empty state -->
+            <div v-if="uiFileEntries.length === 0" class="py-16 text-center">
+                <div class="text-gray-400 dark:text-gray-500 mb-4">
+                    <svg class="w-16 h-16 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                    </svg>
+                </div>
+                <p class="text-gray-500 dark:text-gray-400 text-lg font-medium">No files or folders here</p>
+                <p class="text-gray-400 dark:text-gray-500 text-sm mt-2">Drop files to upload or create a new folder</p>
             </div>
 
+            <!-- File entries -->
             <div v-for="entry in uiFileEntries" :key="entry.id"
-                class="grid grid-cols-12 gap-4 px-4 py-3 rounded-lg hover:bg-gray-50 cursor-pointer"
-                :class="{ 'bg-blue-50': isSelected(entry) }" @click="toggleSelection(entry)">
-                <div class="col-span-6 flex items-center space-x-3">
-                    <CheckCircleIcon class="w-5 h-5" :class="isSelected(entry) ? 'text-blue-500' : 'text-gray-200'" />
-                    <div class="flex items-center flex-1" @click.stop="handleItemClick(entry)">
-                        <FolderIcon v-if="entry.type === 'folder'" class="w-5 h-5 text-yellow-500" />
-                        <FileTypeIcon v-else :fileName="entry.name" :mimeType="entry.mime_type" />
-                        <span class="truncate ml-3 flex-1">{{ entry.name }}</span>
-                        
-                        <!-- Quick action buttons for files -->
-                        <div v-if="entry.type === 'file'" class="flex items-center space-x-1 ml-2" @click.stop>
-                            <button
-                                @click="downloadFile(entry)"
-                                :disabled="downloading[entry.id!]"
-                                class="p-1 text-gray-400 hover:text-blue-600 transition-colors rounded"
-                                title="Download"
-                            >
-                                <ArrowDownTrayIcon class="w-4 h-4" />
-                            </button>
-                            
-                            <!-- Share -->
-                            <button
-                                @click="openShareModal(entry)"
-                                class="p-1 text-gray-400 hover:text-green-600 transition-colors rounded"
-                                title="Share"
-                            >
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.367 2.684 3 3 0 00-5.367-2.684z" />
-                                </svg>
-                            </button>
-                            <!-- Delete -->
-                            <button
-                                @click="deleteFile(entry)"
-                                class="p-1 text-gray-400 hover:text-red-600 transition-colors rounded"
-                                title="Delete"
-                            >
-                                <TrashIcon class="w-4 h-4" />
-                            </button>
+                class="grid grid-cols-12 gap-4 px-4 py-3 rounded-lg border border-transparent hover:border-gray-200 dark:hover:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer transition-all duration-200 group"
+                :class="{ 
+                    'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-700': isSelected(entry),
+                    'hover:shadow-sm': !isSelected(entry)
+                }" 
+                @click="toggleSelection(entry)">
+                
+                <!-- Name column -->
+                <div class="col-span-5 flex items-center space-x-3">
+                    <div class="flex-shrink-0">
+                        <div class="w-5 h-5 rounded-full border-2 transition-colors duration-200"
+                             :class="isSelected(entry) 
+                                ? 'border-blue-500 bg-blue-500 dark:border-blue-400 dark:bg-blue-400' 
+                                : 'border-gray-300 dark:border-gray-600 group-hover:border-gray-400 dark:group-hover:border-gray-500'">
+                            <svg v-if="isSelected(entry)" class="w-3 h-3 text-white dark:text-gray-900 m-0.5" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path>
+                            </svg>
                         </div>
                     </div>
+                    
+                    <div class="flex items-center flex-1 min-w-0" @click.stop="handleItemClick(entry)">
+                        <div class="flex-shrink-0 mr-3">
+                            <FolderIcon v-if="entry.type === 'folder'" class="w-6 h-6 text-yellow-500 dark:text-yellow-400" />
+                            <FileTypeIcon v-else :fileName="entry.name" :mimeType="entry.mime_type" size="w-6 h-6" />
+                        </div>
+                        <span class="truncate text-gray-900 dark:text-white font-medium">{{ entry.name }}</span>
+                    </div>
                 </div>
-                <div class="col-span-3 flex items-center">
-                    {{ entry.modified_at.toLocaleDateString() }}
+                
+                <!-- Share column -->
+                <div class="col-span-2 flex items-center">
+                    <FileShareBadge v-if="entry.type === 'file'" :fileId="entry.id!" />
+                    <span v-else class="text-gray-400 dark:text-gray-500 text-sm">—</span>
                 </div>
-                <div class="col-span-3 flex items-center">{{ formatFileSize(entry.size) }}</div>
+                
+                <!-- Modified column -->
+                <div class="col-span-2 flex items-center">
+                    <span class="text-gray-600 dark:text-gray-400 text-sm">
+                        {{ entry.modified_at.toLocaleDateString() }}
+                    </span>
+                </div>
+                
+                <!-- Size column -->
+                <div class="col-span-2 flex items-center">
+                    <span class="text-gray-600 dark:text-gray-400 text-sm">
+                        {{ formatFileSize(entry.size) }}
+                    </span>
+                </div>
+                
+                <!-- Actions column -->
+                <div class="col-span-1 flex items-center justify-end">
+                    <div v-if="entry.type === 'file'" class="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200" @click.stop>
+                        <button
+                            @click="downloadFile(entry)"
+                            :disabled="downloading[entry.id!]"
+                            class="p-2 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
+                            title="Download"
+                        >
+                            <ArrowDownTrayIcon class="w-4 h-4" />
+                        </button>
+                        
+                        <button
+                            @click="openShareModal(entry)"
+                            class="p-2 text-gray-400 hover:text-green-600 dark:hover:text-green-400 transition-colors rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
+                            title="Share"
+                        >
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.367 2.684 3 3 0 00-5.367-2.684z" />
+                            </svg>
+                        </button>
+                        
+                        <button
+                            @click="deleteFile(entry)"
+                            class="p-2 text-gray-400 hover:text-red-600 dark:hover:text-red-400 transition-colors rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
+                            title="Delete"
+                        >
+                            <TrashIcon class="w-4 h-4" />
+                        </button>
+                    </div>
+                </div>
             </div>
+        </div>
 
-            <!-- Drop zone overlay -->
-            <div v-if="isDragging" class="absolute inset-0 bg-blue-100 bg-opacity-50 flex items-center justify-center">
-                <div class="text-xl font-semibold text-blue-600">
+        <!-- Drop zone overlay -->
+        <div v-if="isDragging" class="fixed inset-0 bg-blue-100 dark:bg-blue-900/50 bg-opacity-50 flex items-center justify-center z-50">
+            <div class="text-center">
+                <div class="text-6xl mb-4">📁</div>
+                <div class="text-2xl font-bold text-blue-600 dark:text-blue-400 mb-2">
                     Drop files here to upload
+                </div>
+                <div class="text-blue-500 dark:text-blue-300">
+                    Release to start uploading
                 </div>
             </div>
         </div>
 
         <!-- Download Progress Panel -->
         <div v-if="downloadQueue.length > 0 || Object.keys(downloadProgress).length > 0" 
-             class="fixed bottom-5 left-5 bg-white shadow-lg rounded-lg p-4 w-80 max-h-64 overflow-y-auto">
+             class="fixed bottom-5 left-5 bg-white dark:bg-gray-800 shadow-lg rounded-lg p-4 w-80 max-h-64 overflow-y-auto border border-gray-200 dark:border-gray-700">
             <div class="flex items-center justify-between mb-3">
-                <h3 class="text-sm font-semibold text-gray-800 flex items-center">
+                <h3 class="text-sm font-semibold text-gray-800 dark:text-gray-200 flex items-center">
                     <ArrowDownTrayIcon class="w-4 h-4 mr-2" />
                     Downloads ({{ downloadQueue.length }})
                 </h3>
                 <button @click="downloadQueue = []; Object.keys(downloadProgress).forEach(key => delete downloadProgress[key])" 
-                        class="text-gray-400 hover:text-gray-600">
+                        class="text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300">
                     <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                         <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
                     </svg>
@@ -862,16 +919,16 @@ onUnmounted(() => {
 
         <!-- Upload Progress Panel -->
         <div v-if="uploadQueue.length > 0" 
-             class="fixed bottom-20 right-5 bg-white shadow-lg rounded-lg p-4 w-80 max-h-64 overflow-y-auto">
+             class="fixed bottom-20 right-5 bg-white dark:bg-gray-800 shadow-lg rounded-lg p-4 w-80 max-h-64 overflow-y-auto border border-gray-200 dark:border-gray-700">
             <div class="flex items-center justify-between mb-3">
-                <h3 class="text-sm font-semibold text-gray-800 flex items-center">
+                <h3 class="text-sm font-semibold text-gray-800 dark:text-gray-200 flex items-center">
                     <svg class="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
                         <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clip-rule="evenodd" />
                     </svg>
                     Uploads ({{ uploadQueue.length }})
                 </h3>
                 <button @click="showUploadModal = false; uploadQueue = []; Object.keys(uploadProgress).forEach(key => delete uploadProgress[key])" 
-                        class="text-gray-400 hover:text-gray-600">
+                        class="text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300">
                     <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                         <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
                     </svg>
