@@ -459,6 +459,39 @@ class FileExplorerController extends Controller
     }
 
     /**
+     * Get preview URL for a shared file
+     */
+    public function getSharedFilePreviewUrl($token)
+    {
+        try {
+            $share = FileShare::where('token', $token)->with('file')->first();
+            
+            if (!$share || !$share->isValid()) {
+                return response()->json(['error' => 'Share link not found or expired'], 404);
+            }
+
+            $file = $share->file;
+            
+            // Generate presigned URL for preview (inline display)
+            $cacheMinutes = (int)env('PRESIGNED_URL_CACHE_MINUTES', 15);
+            $previewUrl = $file->getPreviewUrl($cacheMinutes);
+
+            return response()->json([
+                'preview_url' => $previewUrl,
+                'name' => $file->name
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Shared file preview URL failed', [
+                'error' => $e->getMessage(),
+                'token' => $token,
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json(['error' => 'Failed to generate preview URL'], 500);
+        }
+    }
+
+    /**
      * Helper method to invalidate explorer cache for a path
      */
     private function invalidateExplorerCache($path)

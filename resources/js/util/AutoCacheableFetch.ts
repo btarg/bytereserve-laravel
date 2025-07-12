@@ -95,17 +95,17 @@ export class AutoCacheableFetch {
         try {
             // Parse URL and get pathname
             const pathname = new URL(url, window.location.origin).pathname;
-            
+
             // Use URL encoding for safe cache name
             let cacheName = encodeURIComponent(pathname.replace(/^\/|\/$/g, "") || "root");
-            
+
             // Limit length
             return cacheName.length > 50 ? cacheName.substring(0, 50) : cacheName;
         } catch (e) {
             // Fallback if URL parsing fails
             const strippedUrl = url.replace(/^(https?:\/\/)?([^\/]+)/, "");
             let cacheName = encodeURIComponent(strippedUrl.replace(/^\/|\/$/g, "") || "root");
-                
+
             return cacheName.length > 50 ? cacheName.substring(0, 50) : cacheName;
         }
     }
@@ -233,10 +233,6 @@ export class AutoCacheableFetch {
         const cache = await caches.open(actualCacheName);
 
         switch (cacheStrategy) {
-            case "network-only":
-                // Clear existing cache name from the cache
-                await cache.delete(request);
-                return this.fetchFromNetwork(cache, request, shouldCache);
 
             case "cache-only":
                 const cachedResponse = await cache.match(request);
@@ -264,7 +260,6 @@ export class AutoCacheableFetch {
                 }
 
             case "cache-first":
-            default:
                 const cachedFirstResponse = await cache.match(request);
                 if (cachedFirstResponse) {
                     console.log("Returning cached response for", request.url);
@@ -274,6 +269,13 @@ export class AutoCacheableFetch {
                     return cachedFirstResponse;
                 }
                 return this.fetchFromNetwork(cache, request, shouldCache);
+           
+                case "network-only":
+            default:
+                // Clear existing cache name from the cache
+                await cache.delete(request);
+                return this.fetchFromNetwork(cache, request, shouldCache);
+
         }
     }
 

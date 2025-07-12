@@ -87,5 +87,6 @@ Route::prefix('api')->middleware('auth')->group(function () {
 // Public file sharing routes (no auth required)
 Route::get('/share/{token}', [FileExplorerController::class, 'showSharedFile'])->name('share.show');
 Route::get('/share/{token}/download', [FileExplorerController::class, 'downloadSharedFile'])->name('share.download');
+Route::get('/share/{token}/preview', [FileExplorerController::class, 'getSharedFilePreviewUrl'])->name('share.preview');
 
 require __DIR__.'/auth.php';
