@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\File;
 use App\Models\Folder;
+use App\Models\FileShare;
 use App\Traits\S3Capable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -344,6 +345,116 @@ class FileExplorerController extends Controller
             ]);
 
             return response()->json(['error' => 'Failed to delete folder'], 500);
+        }
+    }
+
+    /**
+     * Create a share link for a file
+     */
+    public function shareFile(Request $request, File $file)
+    {
+        try {
+            // Check if user has access to this file
+            if ($file->user_id !== Auth::id()) {
+                return response()->json(['error' => 'Unauthorized'], 403);
+            }
+
+            // Validate request
+            $validated = $request->validate([
+                'expires_at' => 'nullable|date|after:now',
+                'max_downloads' => 'nullable|integer|min:1'
+            ]);
+
+            // Create new share (always create new for different expiration settings)
+            $shareData = [
+                'file_id' => $file->id,
+                'user_id' => Auth::id(),
+                'token' => FileShare::generateToken(),
+                'is_active' => true,
+            ];
+
+            // Add expiration if provided
+            if (isset($validated['expires_at'])) {
+                $shareData['expires_at'] = $validated['expires_at'];
+            }
+
+            // Add download limit if provided
+            if (isset($validated['max_downloads'])) {
+                $shareData['max_downloads'] = $validated['max_downloads'];
+            }
+
+            $share = FileShare::create($shareData);
+
+            return response()->json([
+                'share_token' => $share->token,
+                'share_url' => route('share.show', $share->token),
+                'file_name' => $file->name,
+                'expires_at' => $share->expires_at?->toISOString(),
+                'max_downloads' => $share->max_downloads
+            ]);
+        } catch (\Exception $e) {
+            Log::error('File share creation failed', [
+                'error' => $e->getMessage(),
+                'file_id' => $file->id,
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json(['error' => 'Failed to create share link'], 500);
+        }
+    }
+
+    /**
+     * Show the shared file download page
+     */
+    public function showSharedFile($token)
+    {
+        $share = FileShare::where('token', $token)->with('file')->first();
+        
+        if (!$share || !$share->isValid()) {
+            return response()->view('errors.404', [], 404);
+        }
+
+        return inertia('SharedFile', [
+            'share_token' => $token,
+            'file_name' => $share->file->name,
+            'file_size' => $share->file->size,
+            'mime_type' => $share->file->mime_type
+        ]);
+    }
+
+    /**
+     * Download a shared file
+     */
+    public function downloadSharedFile($token)
+    {
+        try {
+            $share = FileShare::where('token', $token)->with('file')->first();
+            
+            if (!$share || !$share->isValid()) {
+                return response()->json(['error' => 'Share link not found or expired'], 404);
+            }
+
+            $file = $share->file;
+            
+            // Generate presigned URL
+            $cacheMinutes = (int)env('PRESIGNED_URL_CACHE_MINUTES', 15);
+            $downloadUrl = $file->getPresignedUrl($cacheMinutes);
+
+            // Increment download count
+            $share->incrementDownloadCount();
+
+            return response()->json([
+                'download_url' => $downloadUrl,
+                'name' => $file->name
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Shared file download failed', [
+                'error' => $e->getMessage(),
+                'token' => $token,
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json(['error' => 'Failed to generate download URL'], 500);
         }
     }
 

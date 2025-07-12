@@ -3,7 +3,6 @@ import { nextTick, ref, watch } from 'vue';
 import {
     ArrowDownTrayIcon,
     TrashIcon,
-    ShareIcon,
     FolderPlusIcon
 } from '@heroicons/vue/24/outline';
 import { UIFileEntry } from '../../types';
@@ -58,26 +57,37 @@ const createNewFolder = async () => {
     }
 };
 
-const downloadSelectedFile = async () => {
-    if (props.selectedItems.length !== 1 || props.selectedItems[0].type !== 'file') return;
+const downloadSelectedFiles = async () => {
+    const filesToDownload = props.selectedItems.filter(item => item.type === 'file');
+    
+    if (filesToDownload.length === 0) {
+        alert('No files selected for download');
+        return;
+    }
 
-    const file = props.selectedItems[0];
     downloading.value = true;
 
     try {
-        const response = await window.cacheFetch.get(route('files.download.' + file.id));
-        const data = await response.json();
+        for (const file of filesToDownload) {
+            const response = await window.cacheFetch.get(route('files.download.' + file.id));
+            const data = await response.json();
 
-        if (data.download_url) {
-            const link = document.createElement('a');
-            link.href = data.download_url;
-            link.setAttribute('download', file.name);
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
+            if (data.download_url) {
+                const link = document.createElement('a');
+                link.href = data.download_url;
+                link.setAttribute('download', file.name);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                
+                // Add a small delay between downloads to avoid browser blocking
+                if (filesToDownload.length > 1) {
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                }
+            }
         }
     } catch (error) {
-        console.error('Error downloading file:', error);
+        console.error('Error downloading files:', error);
     } finally {
         downloading.value = false;
     }
@@ -152,23 +162,16 @@ const deleteSelectedItems = async () => {
                 </button>
             </form>
 
-            <!-- Share Button -->
-            <button :disabled="selectedItems.length === 0"
-                class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed">
-                <ShareIcon class="w-5 h-5 mr-2" />
-                Share
-            </button>
-
             <!-- Download Button -->
-            <button :disabled="selectedItems.length !== 1 || selectedItems[0].type !== 'file'"
-                @click="downloadSelectedFile"
+            <button :disabled="selectedItems.filter(item => item.type === 'file').length === 0"
+                @click="downloadSelectedFiles"
                 class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed">
                 <template v-if="downloading">
                     <span
                         class="animate-spin h-5 w-5 mr-2 border-2 border-blue-500 rounded-full border-t-transparent"></span>
                 </template>
                 <ArrowDownTrayIcon v-else class="w-5 h-5 mr-2" />
-                Download
+                Download ({{ selectedItems.filter(item => item.type === 'file').length }})
             </button>
 
             <!-- Delete Button -->

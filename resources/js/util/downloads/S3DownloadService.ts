@@ -160,7 +160,7 @@ export class S3DownloadService {
     /**
      * Decrypt the downloaded file
      */
-    private async decryptFile(encryptedData: ArrayBuffer, password: string): Promise<ArrayBuffer> {
+    public async decryptFile(encryptedData: ArrayBuffer, password: string): Promise<ArrayBuffer> {
         console.log('Starting file decryption...');
 
         const dataView = new Uint8Array(encryptedData);

@@ -1,5 +1,4 @@
 <?php
-// filepath: /c:/Users/BenTa/Documents/Laravel/chirper/app/Models/File.php
 namespace App\Models;
 
 use App\Traits\S3Capable;

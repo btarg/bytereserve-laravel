@@ -76,11 +76,16 @@ Route::prefix('api')->middleware('auth')->group(function () {
     Route::post('/files', [FileExplorerController::class, 'storeFile'])->name('files.store');
     Route::post('/folders', [FileExplorerController::class, 'storeFolder'])->name('folders.store');
     Route::get('/files/{file}/download', [FileExplorerController::class, 'download'])->name('files.download.{file}');
+    Route::post('/files/{file}/share', [FileExplorerController::class, 'shareFile'])->name('files.share');
     Route::delete('/files/{file}', [FileExplorerController::class, 'destroyFile'])->name('files.destroy.{file}');
     Route::delete('/folders/{folder}', [FileExplorerController::class, 'destroyFolder'])->name('folders.destroy.{folder}');
     
     Route::get('/files/sync', [FileSyncController::class, 'sync'])->name('explorer.files.sync');
     Route::get('/folders/sync', [FolderSyncController::class, 'sync'])->name('explorer.folders.sync');
 });
+
+// Public file sharing routes (no auth required)
+Route::get('/share/{token}', [FileExplorerController::class, 'showSharedFile'])->name('share.show');
+Route::get('/share/{token}/download', [FileExplorerController::class, 'downloadSharedFile'])->name('share.download');
 
 require __DIR__.'/auth.php';

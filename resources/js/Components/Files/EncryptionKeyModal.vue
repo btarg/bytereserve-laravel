@@ -22,8 +22,12 @@
             
             <div class="mb-4">
                 <p class="text-sm text-gray-700 mb-3">
-                    The file "<span class="font-medium">{{ fileName }}</span>" is encrypted. 
-                    Please enter the decryption key to download it.
+                    The file 
+                    <span class="inline-flex items-center font-medium">
+                        <FileTypeIcon v-if="fileName" :fileName="fileName" size="w-4 h-4" className="mr-1" />
+                        "{{ fileName }}"
+                    </span> 
+                    is encrypted. Please enter the decryption key to download it.
                 </p>
                 
                 <label for="encryptionKey" class="block text-sm font-medium text-gray-700 mb-2">
@@ -70,6 +74,7 @@
 
 <script setup lang="ts">
 import { ref, watch, nextTick } from 'vue';
+import FileTypeIcon from './FileTypeIcon.vue';
 
 const props = defineProps<{
     show: boolean;

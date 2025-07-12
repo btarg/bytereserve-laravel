@@ -1,19 +1,21 @@
 ﻿<script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, defineProps, defineEmits } from 'vue';
 import { UIFileEntry } from '../../types';
-import { getItemsByPath } from '@/util/database/ModelRegistry';
+import { getItemsByPath, Files, Folders } from '@/util/database/ModelRegistry';
 
 
 import {
     FolderIcon,
-    DocumentIcon,
     CheckCircleIcon,
-    ArrowDownTrayIcon
+    ArrowDownTrayIcon,
+    TrashIcon
 } from '@heroicons/vue/24/outline';
 
 import { S3UploadService } from "@/util/uploads/S3UploadService";
 import { S3DownloadService } from "@/util/downloads/S3DownloadService";
 import EncryptionKeyModal from "./EncryptionKeyModal.vue";
+import ShareModal from "./ShareModal.vue";
+import FileTypeIcon from "./FileTypeIcon.vue";
 import { useToast } from "vue-toastification";
 import { route } from 'ziggy-js';
 import { formatFileSize } from '@/util/FormattingUtils';
@@ -51,6 +53,10 @@ const showEncryptionKeyModal = ref(false);
 const encryptionKey = ref('');
 const pendingDownload = ref<UIFileEntry | null>(null);
 const isFileEncrypted = ref(false);
+
+// Share modal state
+const showShareModal = ref(false);
+const shareItem = ref<UIFileEntry | null>(null);
 
 const refreshFiles = async (forceSync = false) => {
     console.log("Refreshing files, forceSync:", forceSync);
@@ -319,11 +325,60 @@ const handleEncryptionKeySubmit = async (key: string) => {
 
 const cancelEncryptionKeyModal = () => {
     showEncryptionKeyModal.value = false;
-    pendingDownload.value = null;
     encryptionKey.value = '';
+    pendingDownload.value = null;
     isFileEncrypted.value = false;
 };
 
+const openShareModal = (item: UIFileEntry) => {
+    shareItem.value = item;
+    showShareModal.value = true;
+};
+
+const closeShareModal = () => {
+    showShareModal.value = false;
+    shareItem.value = null;
+};
+
+const deleteFile = async (item: UIFileEntry) => {
+    if (!confirm(`Are you sure you want to delete "${item.name}"?`)) {
+        return;
+    }
+
+    try {
+        if (item.type === 'file') {
+            // Delete from the server
+            await window.cacheFetch.delete(route('files.destroy.{file}', { file: item.id }));
+
+            // Also delete from IndexedDB
+            try {
+                await Files().delete(item.id);
+                console.log(`File ${item.id} deleted from IndexedDB`);
+            } catch (dbError) {
+                console.warn(`Could not delete file ${item.id} from IndexedDB:`, dbError);
+            }
+        } else {
+            // Delete from the server
+            await window.cacheFetch.delete(route('folders.destroy.{folder}', { folder: item.id }));
+
+            // Also delete from IndexedDB
+            try {
+                await Folders().delete(item.id);
+                console.log(`Folder ${item.id} deleted from IndexedDB`);
+            } catch (dbError) {
+                console.warn(`Could not delete folder ${item.id} from IndexedDB:`, dbError);
+            }
+        }
+
+        // Refresh the file list
+        await refreshFiles();
+        
+        toast.success(`${item.name} deleted successfully`);
+    } catch (error) {
+        console.error('Failed to delete item:', error);
+        toast.error(`Failed to delete ${item.name}`);
+    }
+};
 
 const fetchItems = async (forceSync = false) => {
     isLoading.value = true;
@@ -629,10 +684,41 @@ onUnmounted(() => {
                 :class="{ 'bg-blue-50': isSelected(entry) }" @click="toggleSelection(entry)">
                 <div class="col-span-6 flex items-center space-x-3">
                     <CheckCircleIcon class="w-5 h-5" :class="isSelected(entry) ? 'text-blue-500' : 'text-gray-200'" />
-                    <div class="flex items-center" @click.stop="handleItemClick(entry)">
+                    <div class="flex items-center flex-1" @click.stop="handleItemClick(entry)">
                         <FolderIcon v-if="entry.type === 'folder'" class="w-5 h-5 text-yellow-500" />
-                        <DocumentIcon v-else class="w-5 h-5 text-blue-500" />
-                        <span class="truncate ml-3">{{ entry.name }}</span>
+                        <FileTypeIcon v-else :fileName="entry.name" :mimeType="entry.mime_type" />
+                        <span class="truncate ml-3 flex-1">{{ entry.name }}</span>
+                        
+                        <!-- Quick action buttons for files -->
+                        <div v-if="entry.type === 'file'" class="flex items-center space-x-1 ml-2" @click.stop>
+                            <button
+                                @click="downloadFile(entry)"
+                                :disabled="downloading[entry.id!]"
+                                class="p-1 text-gray-400 hover:text-blue-600 transition-colors rounded"
+                                title="Download"
+                            >
+                                <ArrowDownTrayIcon class="w-4 h-4" />
+                            </button>
+                            
+                            <!-- Share -->
+                            <button
+                                @click="openShareModal(entry)"
+                                class="p-1 text-gray-400 hover:text-green-600 transition-colors rounded"
+                                title="Share"
+                            >
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.367 2.684 3 3 0 00-5.367-2.684z" />
+                                </svg>
+                            </button>
+                            <!-- Delete -->
+                            <button
+                                @click="deleteFile(entry)"
+                                class="p-1 text-gray-400 hover:text-red-600 transition-colors rounded"
+                                title="Delete"
+                            >
+                                <TrashIcon class="w-4 h-4" />
+                            </button>
+                        </div>
                     </div>
                 </div>
                 <div class="col-span-3 flex items-center">
@@ -647,18 +733,6 @@ onUnmounted(() => {
                     Drop files here to upload
                 </div>
             </div>
-        </div>
-
-        <!-- Action buttons for selected items -->
-        <div v-if="selectedItems.length === 1" class="fixed bottom-5 right-5 bg-white shadow-lg rounded-lg p-2 flex">
-            <button v-if="selectedItems[0].type === 'file'" @click="downloadFile(selectedItems[0])"
-                class="p-2 text-blue-600 hover:bg-blue-50 rounded flex items-center gap-2"
-                :disabled="downloading[selectedItems[0].id]">
-                <span v-if="downloading[selectedItems[0].id]"
-                    class="animate-spin h-5 w-5 border-2 border-blue-500 rounded-full border-t-transparent"></span>
-                <ArrowDownTrayIcon v-else class="w-5 h-5" />
-                Download
-            </button>
         </div>
 
         <!-- Download Progress Panel -->
@@ -741,8 +815,11 @@ onUnmounted(() => {
             <!-- Upload Queue Items -->
             <div v-for="queueItem in uploadQueue" :key="queueItem.id" class="mb-3 last:mb-0">
                 <div class="flex items-center justify-between mb-1">
-                    <span class="text-xs font-medium text-gray-700 truncate">{{ queueItem.fileName }}</span>
-                    <span class="text-xs px-2 py-1 rounded-full" 
+                    <div class="flex items-center space-x-2 flex-1 min-w-0">
+                        <FileTypeIcon :fileName="queueItem.fileName" size="w-4 h-4" className="flex-shrink-0" />
+                        <span class="text-xs font-medium text-gray-700 truncate">{{ queueItem.fileName }}</span>
+                    </div>
+                    <span class="text-xs px-2 py-1 rounded-full ml-2" 
                           :class="{
                               'bg-yellow-100 text-yellow-800': queueItem.status === 'pending',
                               'bg-blue-100 text-blue-800': queueItem.status === 'uploading',
@@ -788,6 +865,14 @@ onUnmounted(() => {
             v-model:encryptionKey="encryptionKey"
             @submit="handleEncryptionKeySubmit"
             @cancel="cancelEncryptionKeyModal"
+        />
+
+        <!-- Share Modal -->
+        <ShareModal
+            :show="showShareModal"
+            :fileName="shareItem?.name"
+            :fileId="shareItem?.id"
+            @cancel="closeShareModal"
         />
     </div>
 </template>
