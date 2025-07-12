@@ -33,7 +33,33 @@
                     </p>
                 </div>
 
-                <div class="mb-4">
+                <!-- Share Status -->
+                <div class="mb-4 p-3 bg-gray-50 rounded-lg">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center">
+                            <div class="w-2 h-2 rounded-full mr-2" :class="isShareEnabled ? 'bg-green-500' : 'bg-gray-400'"></div>
+                            <span class="text-sm font-medium text-gray-700">
+                                {{ isShareEnabled ? 'Share link is active' : 'Share link is disabled' }}
+                            </span>
+                        </div>
+                        <button 
+                            @click="toggleShare"
+                            :disabled="isLoading"
+                            class="px-3 py-1 text-xs font-medium rounded-md transition-colors"
+                            :class="isShareEnabled 
+                                ? 'bg-red-100 text-red-800 hover:bg-red-200' 
+                                : 'bg-green-100 text-green-800 hover:bg-green-200'"
+                        >
+                            {{ isLoading ? 'Updating...' : (isShareEnabled ? 'Disable' : 'Enable') }}
+                        </button>
+                    </div>
+                    <div v-if="shareExists && downloadCount > 0" class="text-xs text-gray-500 mt-1">
+                        Downloaded {{ downloadCount }} time{{ downloadCount !== 1 ? 's' : '' }}
+                        <span v-if="maxDownloads"> of {{ maxDownloads }}</span>
+                    </div>
+                </div>
+
+                <div v-if="isShareEnabled" class="mb-4">
                     <label class="flex items-center">
                         <input type="checkbox" v-model="includeEncryptionKey"
                             class="rounded border-gray-300 text-blue-600 shadow-sm focus:border-blue-300 focus:ring focus:ring-blue-200 focus:ring-opacity-50" />
@@ -44,12 +70,16 @@
                     </p>
                 </div>
 
-                <div class="mb-4">
+                <div v-if="isShareEnabled" class="mb-4">
                     <label for="expirationOption" class="block text-sm font-medium text-gray-700 mb-2">
                         Link Expiration
                     </label>
-                    <select id="expirationOption" v-model="expirationOption"
-                        class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                    <select 
+                        id="expirationOption" 
+                        v-model="expirationOption"
+                        @change="toggleShare"
+                        class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    >
                         <option value="never">Never expires</option>
                         <option value="1h">1 hour</option>
                         <option value="24h">24 hours</option>
@@ -61,7 +91,7 @@
                     </p>
                 </div>
 
-                <div v-if="includeEncryptionKey" class="mb-4">
+                <div v-if="isShareEnabled && includeEncryptionKey" class="mb-4">
                     <label for="shareEncryptionKey" class="block text-sm font-medium text-gray-700 mb-2">
                         Encryption Key
                     </label>
@@ -74,7 +104,7 @@
                     </p>
                 </div>
 
-                <div v-if="shareUrl" class="mb-4">
+                <div v-if="isShareEnabled && shareUrl" class="mb-4">
                     <label class="block text-sm font-medium text-gray-700 mb-2">
                         Share URL
                     </label>
@@ -97,8 +127,7 @@
             </div>
 
             <div class="flex justify-end space-x-3">
-
-                <button v-if="shareUrl && supportsNativeShare" @click="shareNative"
+                <button v-if="isShareEnabled && shareUrl && supportsNativeShare" @click="shareNative"
                     class="px-4 py-2 text-sm font-medium text-white bg-green-600 border border-transparent rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500">
                     <svg class="w-4 h-4 inline-block mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -138,6 +167,12 @@ const copied = ref(false);
 const keyInput = ref<HTMLInputElement>();
 const urlInput = ref<HTMLInputElement>();
 const expirationOption = ref<string>('never'); // never, 1h, 24h, 7d, 30d
+const isShareEnabled = ref(false);
+const shareExists = ref(false);
+const shareToken = ref('');
+const downloadCount = ref(0);
+const maxDownloads = ref<number | null>(null);
+const isLoading = ref(false);
 
 // Check if native share is available
 const supportsNativeShare = computed(() => {
@@ -152,8 +187,14 @@ watch(() => props.show, (show) => {
         shareUrl.value = '';
         copied.value = false;
         expirationOption.value = 'never';
+        isShareEnabled.value = false;
+        shareExists.value = false;
+        shareToken.value = '';
+        downloadCount.value = 0;
+        maxDownloads.value = null;
+        isLoading.value = false;
         nextTick(() => {
-            generateShareUrl();
+            loadShareStatus();
         });
     }
 });
@@ -168,32 +209,82 @@ watch(includeEncryptionKey, (include) => {
         encryptionKey.value = '';
     }
     // Regenerate URL when checkbox changes
-    if (shareUrl.value) {
+    if (shareUrl.value && isShareEnabled.value) {
         generateShareUrl();
     }
 });
 
 // Watch for encryption key changes to regenerate URL
 watch(encryptionKey, () => {
-    if (shareUrl.value) {
+    if (shareUrl.value && isShareEnabled.value) {
         generateShareUrl();
     }
 });
 
-// Watch for expiration option changes to regenerate URL
-watch(expirationOption, () => {
-    if (shareUrl.value) {
-        generateShareUrl();
-    }
-});
-
-const generateShareUrl = async () => {
+const loadShareStatus = async () => {
     if (!props.fileId) return;
     
     try {
-        // Prepare request payload with expiration
-        const payload: any = {};
+        isLoading.value = true;
         
+        // Get current share status
+        const response = await window.cacheFetch.post(route('files.share', { file: props.fileId }), {});
+
+        if (!response.ok) {
+            throw new Error('Failed to load share status');
+        }
+
+        const data = await response.json();
+        
+        shareExists.value = true;
+        shareToken.value = data.share_token;
+        isShareEnabled.value = data.is_active;
+        downloadCount.value = data.download_count || 0;
+        maxDownloads.value = data.max_downloads;
+        
+        // Update expiration option based on existing share
+        if (data.expires_at) {
+            const expiresAt = new Date(data.expires_at);
+            const now = new Date();
+            const diffHours = Math.abs(expiresAt.getTime() - now.getTime()) / (1000 * 60 * 60);
+            
+            if (diffHours <= 1) {
+                expirationOption.value = '1h';
+            } else if (diffHours <= 24) {
+                expirationOption.value = '24h';
+            } else if (diffHours <= 168) { // 7 days
+                expirationOption.value = '7d';
+            } else if (diffHours <= 720) { // 30 days
+                expirationOption.value = '30d';
+            } else {
+                expirationOption.value = 'never';
+            }
+        } else {
+            expirationOption.value = 'never';
+        }
+        
+        // Generate URL if share is active
+        if (isShareEnabled.value) {
+            generateShareUrl();
+        }
+    } catch (error) {
+        console.error('Error loading share status:', error);
+    } finally {
+        isLoading.value = false;
+    }
+};
+
+const toggleShare = async () => {
+    if (!props.fileId) return;
+    
+    try {
+        isLoading.value = true;
+        
+        const payload: any = {
+            is_active: !isShareEnabled.value
+        };
+        
+        // Add expiration if set
         if (expirationOption.value !== 'never') {
             const now = new Date();
             let expiresAt: Date;
@@ -218,15 +309,36 @@ const generateShareUrl = async () => {
             }
         }
         
-        // Create share link on the server
-        const response = await window.cacheFetch.post(route('files.share', { file: props.fileId }), payload);
+        const response = await window.cacheFetch.put(route('files.share.update', { file: props.fileId }), payload);
 
         if (!response.ok) {
-            throw new Error('Failed to generate share link');
+            throw new Error('Failed to update share');
         }
 
         const data = await response.json();
-        let url = `${window.location.origin}/share/${data.share_token}`;
+        
+        isShareEnabled.value = data.is_active;
+        downloadCount.value = data.download_count || 0;
+        maxDownloads.value = data.max_downloads;
+        
+        // Generate URL if share is now active
+        if (isShareEnabled.value) {
+            generateShareUrl();
+        } else {
+            shareUrl.value = '';
+        }
+    } catch (error) {
+        console.error('Error updating share:', error);
+    } finally {
+        isLoading.value = false;
+    }
+};
+
+const generateShareUrl = async () => {
+    if (!props.fileId || !shareToken.value) return;
+    
+    try {
+        let url = `${window.location.origin}/share/${shareToken.value}`;
         
         // Add encryption key to URL hash if included
         if (includeEncryptionKey.value && encryptionKey.value) {

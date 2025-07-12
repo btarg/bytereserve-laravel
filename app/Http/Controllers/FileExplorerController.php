@@ -353,7 +353,7 @@ class FileExplorerController extends Controller
     }
 
     /**
-     * Create a share link for a file
+     * Get or create a share link for a file
      */
     public function shareFile(Request $request, File $file)
     {
@@ -363,38 +363,40 @@ class FileExplorerController extends Controller
                 return response()->json(['error' => 'Unauthorized'], 403);
             }
 
-            // Validate request
-            $validated = $request->validate([
-                'expires_at' => 'nullable|date|after:now',
-                'max_downloads' => 'nullable|integer|min:1'
-            ]);
+            // Check if a share already exists for this file
+            $existingShare = FileShare::where('file_id', $file->id)
+                ->where('user_id', Auth::id())
+                ->first();
 
-            // Create new share (always create new for different expiration settings)
-            $shareData = [
+            if ($existingShare) {
+                // Return existing share
+                return response()->json([
+                    'share_token' => $existingShare->token,
+                    'share_url' => route('share.show', $existingShare->token),
+                    'file_name' => $file->name,
+                    'is_active' => $existingShare->is_active,
+                    'expires_at' => $existingShare->expires_at?->toISOString(),
+                    'max_downloads' => $existingShare->max_downloads,
+                    'download_count' => $existingShare->download_count
+                ]);
+            }
+
+            // Create new share (disabled by default)
+            $share = FileShare::create([
                 'file_id' => $file->id,
                 'user_id' => Auth::id(),
                 'token' => FileShare::generateToken(),
-                'is_active' => true,
-            ];
-
-            // Add expiration if provided
-            if (isset($validated['expires_at'])) {
-                $shareData['expires_at'] = $validated['expires_at'];
-            }
-
-            // Add download limit if provided
-            if (isset($validated['max_downloads'])) {
-                $shareData['max_downloads'] = $validated['max_downloads'];
-            }
-
-            $share = FileShare::create($shareData);
+                'is_active' => false, // Disabled by default
+            ]);
 
             return response()->json([
                 'share_token' => $share->token,
                 'share_url' => route('share.show', $share->token),
                 'file_name' => $file->name,
+                'is_active' => $share->is_active,
                 'expires_at' => $share->expires_at?->toISOString(),
-                'max_downloads' => $share->max_downloads
+                'max_downloads' => $share->max_downloads,
+                'download_count' => $share->download_count
             ]);
         } catch (\Exception $e) {
             Log::error('File share creation failed', [
@@ -404,6 +406,66 @@ class FileExplorerController extends Controller
             ]);
 
             return response()->json(['error' => 'Failed to create share link'], 500);
+        }
+    }
+
+    /**
+     * Update share settings
+     */
+    public function updateShare(Request $request, File $file)
+    {
+        try {
+            // Check if user has access to this file
+            if ($file->user_id !== Auth::id()) {
+                return response()->json(['error' => 'Unauthorized'], 403);
+            }
+
+            // Validate request
+            $validated = $request->validate([
+                'is_active' => 'required|boolean',
+                'expires_at' => 'nullable|date|after:now',
+                'max_downloads' => 'nullable|integer|min:1'
+            ]);
+
+            // Find existing share
+            $share = FileShare::where('file_id', $file->id)
+                ->where('user_id', Auth::id())
+                ->first();
+
+            if (!$share) {
+                return response()->json(['error' => 'Share not found'], 404);
+            }
+
+            // Update share settings
+            $share->is_active = $validated['is_active'];
+            
+            if (isset($validated['expires_at'])) {
+                $share->expires_at = $validated['expires_at'];
+            }
+            
+            if (isset($validated['max_downloads'])) {
+                $share->max_downloads = $validated['max_downloads'];
+            }
+
+            $share->save();
+
+            return response()->json([
+                'share_token' => $share->token,
+                'share_url' => route('share.show', $share->token),
+                'file_name' => $file->name,
+                'is_active' => $share->is_active,
+                'expires_at' => $share->expires_at?->toISOString(),
+                'max_downloads' => $share->max_downloads,
+                'download_count' => $share->download_count
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Share update failed', [
+                'error' => $e->getMessage(),
+                'file_id' => $file->id,
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json(['error' => 'Failed to update share'], 500);
         }
     }
 

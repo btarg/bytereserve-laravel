@@ -77,6 +77,7 @@ Route::prefix('api')->middleware('auth')->group(function () {
     Route::post('/folders', [FileExplorerController::class, 'storeFolder'])->name('folders.store');
     Route::get('/files/{file}/download', [FileExplorerController::class, 'download'])->name('files.download.{file}');
     Route::post('/files/{file}/share', [FileExplorerController::class, 'shareFile'])->name('files.share');
+    Route::put('/files/{file}/share', [FileExplorerController::class, 'updateShare'])->name('files.share.update');
     Route::delete('/files/{file}', [FileExplorerController::class, 'destroyFile'])->name('files.destroy.{file}');
     Route::delete('/folders/{folder}', [FileExplorerController::class, 'destroyFolder'])->name('folders.destroy.{folder}');
     
