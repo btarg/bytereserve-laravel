@@ -154,7 +154,7 @@ export async function getItemsByPath(path: string, forceSync = false) {
 // Generic sync function for any model
 async function syncModel(modelName: string, syncEndpoint: string, lastSync: number) {
     try {
-        const response = await window.cacheFetch.fetch(
+        const response = await fetch(
             route(syncEndpoint) + '?' + new URLSearchParams({
                 since: lastSync.toString()
             }).toString(),

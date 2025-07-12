@@ -12,6 +12,8 @@ import {
 } from '@heroicons/vue/24/outline';
 
 import { S3UploadService } from "@/util/uploads/S3UploadService";
+import { S3DownloadService } from "@/util/downloads/S3DownloadService";
+import EncryptionKeyModal from "./EncryptionKeyModal.vue";
 import { useToast } from "vue-toastification";
 import { route } from 'ziggy-js';
 import { formatFileSize } from '@/util/FormattingUtils';
@@ -33,8 +35,22 @@ const currentFolderId = ref<number | null>(null);
 const downloading = ref<Record<number, boolean>>({});
 
 const uploadService = new S3UploadService();
+const downloadService = new S3DownloadService();
 const uploadProgress = ref<Record<string, number>>({});
 const uploadsInProgress = ref<number>(0);
+
+// Download progress and encryption key management
+const downloadProgress = ref<Record<number, { progress: number; fileName: string }>>({});
+const downloadQueue = ref<Array<{ id: number; fileName: string; status: 'pending' | 'downloading' | 'completed' | 'failed' }>>([]);
+
+// Upload progress management
+const uploadQueue = ref<Array<{ id: string; fileName: string; status: 'pending' | 'uploading' | 'completed' | 'failed'; progress: number }>>([]);
+const showUploadModal = ref(false);
+
+const showEncryptionKeyModal = ref(false);
+const encryptionKey = ref('');
+const pendingDownload = ref<UIFileEntry | null>(null);
+const isFileEncrypted = ref(false);
 
 const refreshFiles = async (forceSync = false) => {
     console.log("Refreshing files, forceSync:", forceSync);
@@ -76,99 +92,236 @@ const downloadFile = async (item: UIFileEntry) => {
     try {
         downloading.value[item.id] = true;
 
-        // Get the download URL from the API
-        const response = await window.cacheFetch.get(
+        // Add to download queue
+        downloadQueue.value.push({
+            id: item.id as number,
+            fileName: item.name,
+            status: 'pending'
+        });
+
+        // Get download URL to check if file is encrypted
+        const response = await fetch(
             route('files.download.{file}', { file: item.id }),
-            {},
-            {}
+            {
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-XSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || ''
+                }
+            }
         );
 
-        const data = await response.json();
-        console.log(data);
-
-        if (data.download_url) {
-            try {
-                // Parse the URL to check expiration
-                const url = new URL(data.download_url);
-                const amzDate = url.searchParams.get('X-Amz-Date');
-                const amzExpires = url.searchParams.get('X-Amz-Expires');
-
-                let isExpired = false;
-
-                if (amzDate && amzExpires) {
-                    // Parse the date and expiration time
-                    // Format: YYYYMMDDTHHMMSSZ (ISO 8601 format)
-                    const year = parseInt(amzDate.substring(0, 4));
-                    const month = parseInt(amzDate.substring(4, 6)) - 1; // Months are 0-indexed in JS
-                    const day = parseInt(amzDate.substring(6, 8));
-                    const hour = parseInt(amzDate.substring(9, 11));
-                    const minute = parseInt(amzDate.substring(11, 13));
-                    const second = parseInt(amzDate.substring(13, 15));
-
-                    const dateObj = new Date(Date.UTC(year, month, day, hour, minute, second));
-                    const expiresInSeconds = parseInt(amzExpires);
-                    const expirationTime = new Date(dateObj.getTime() + expiresInSeconds * 1000);
-
-                    // Check if the URL has expired
-                    isExpired = new Date() > expirationTime;
-                    console.log(`URL expiration check: Current time: ${new Date().toISOString()}, Expires: ${expirationTime.toISOString()}, Expired: ${isExpired}`);
-                }
-
-                if (!isExpired) {
-                    // URL is still valid, proceed with download
-                    const link = document.createElement('a');
-                    link.href = data.download_url;
-                    link.setAttribute('download', item.name);
-                    document.body.appendChild(link);
-                    link.click();
-                    document.body.removeChild(link);
-                    toast.success(`Downloading ${item.name}`);
-                } else {
-                    // URL has expired, get a fresh one
-                    console.log("Download link expired, generating a new one...");
-
-                    const newLinkResponse = await window.cacheFetch.get(
-                        route('files.download.{file}', { file: item.id }),
-                        {},
-                        { cacheStrategy: 'network-only' }
-                    );
-
-                    const newData = await newLinkResponse.json();
-
-                    if (newData.download_url) {
-                        const link = document.createElement('a');
-                        link.href = newData.download_url;
-                        link.setAttribute('download', item.name);
-                        document.body.appendChild(link);
-                        link.click();
-                        document.body.removeChild(link);
-                        toast.success(`Downloading ${item.name}`);
-                    } else {
-                        toast.error("Failed to generate a new download link");
-                    }
-                }
-            } catch (error) {
-                console.error('Error processing download URL:', error);
-
-                // If URL parsing fails, try direct download as a fallback
-                console.log("Attempting direct download as fallback...");
-                const link = document.createElement('a');
-                link.href = data.download_url;
-                link.setAttribute('download', item.name);
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-                toast.success(`Downloading ${item.name}`);
-            }
-        } else {
-            toast.error("Download URL not found");
+        if (!response.ok) {
+            throw new Error(`Failed to get download URL: ${response.statusText}`);
         }
+
+        const data = await response.json();
+        
+        if (!data.download_url) {
+            throw new Error('No download URL provided');
+        }
+
+        // Check if file is encrypted by downloading a small sample
+        const isEncrypted = await checkIfFileIsEncrypted(data.download_url);
+        
+        if (isEncrypted) {
+            // Show encryption key modal
+            pendingDownload.value = item;
+            isFileEncrypted.value = true;
+            showEncryptionKeyModal.value = true;
+            
+            // Remove from queue temporarily
+            const queueIndex = downloadQueue.value.findIndex(q => q.id === item.id);
+            if (queueIndex !== -1) {
+                downloadQueue.value.splice(queueIndex, 1);
+            }
+            
+            downloading.value[item.id] = false;
+            return;
+        }
+
+        // File is not encrypted, proceed with download
+        await performDownload(item, "");
+        
     } catch (error) {
         console.error('Error downloading file:', error);
         toast.error(`Error downloading file: ${error.message || 'Unknown error'}`);
+        
+        // Update queue status
+        const queueItem = downloadQueue.value.find(q => q.id === item.id);
+        if (queueItem) {
+            queueItem.status = 'failed';
+        }
+        
+        downloading.value[item.id] = false;
+    }
+};
+
+const checkIfFileIsEncrypted = async (downloadUrl: string): Promise<boolean> => {
+    try {
+        // Download just the first few bytes to check for salt
+        const response = await fetch(downloadUrl, {
+            headers: {
+                'Range': 'bytes=0-31' // Get first 32 bytes
+            }
+        });
+        
+        if (!response.ok) {
+            return false; // Assume not encrypted if we can't check
+        }
+        
+        const buffer = await response.arrayBuffer();
+        const dataView = new Uint8Array(buffer);
+        
+        // Check if file has the minimum size for encryption (salt + iv + auth tag)
+        if (dataView.length >= 16) {
+            // This is a simple heuristic - in a real app you might want to store encryption metadata
+            return true; // Assume encrypted if file is large enough
+        }
+        
+        return false;
+    } catch (error) {
+        console.error('Error checking encryption status:', error);
+        return false; // Default to not encrypted
+    }
+};
+
+const performDownload = async (item: UIFileEntry, password: string) => {
+    try {
+        downloading.value[item.id] = true;
+        
+        // Update queue status
+        const queueItem = downloadQueue.value.find(q => q.id === item.id);
+        if (queueItem) {
+            queueItem.status = 'downloading';
+        }
+
+        // Use the download service to handle encrypted downloads
+        const decryptedBlob = await downloadService.downloadFile(
+            item.id as number,
+            item.name,
+            password || "password", // Use provided password or default
+            (progress) => {
+                downloadProgress.value[item.id] = {
+                    progress: progress.percentage,
+                    fileName: item.name
+                };
+                console.log(`Download progress: ${progress.percentage.toFixed(1)}%`);
+            }
+        );
+
+        // Create a more reliable download completion tracking using focus events
+        let downloadProcessed = false;
+        let timeoutId: number;
+        
+        const cleanupDownload = (wasSuccessful: boolean) => {
+            if (downloadProcessed) return;
+            downloadProcessed = true;
+            
+            clearTimeout(timeoutId);
+            
+            if (wasSuccessful) {
+                toast.success(`Downloaded ${item.name}`);
+                
+                // Update queue status
+                if (queueItem) {
+                    queueItem.status = 'completed';
+                }
+                
+                // Clean up after delay
+                setTimeout(() => {
+                    delete downloadProgress.value[item.id];
+                    const index = downloadQueue.value.findIndex(q => q.id === item.id);
+                    if (index !== -1) {
+                        downloadQueue.value.splice(index, 1);
+                    }
+                }, 2000);
+            } else {
+                // Download was cancelled
+                toast.info(`Download cancelled for ${item.name}`);
+                
+                // Remove from queue immediately
+                const index = downloadQueue.value.findIndex(q => q.id === item.id);
+                if (index !== -1) {
+                    downloadQueue.value.splice(index, 1);
+                }
+                
+                delete downloadProgress.value[item.id];
+            }
+            
+            // Cleanup event listeners
+            window.removeEventListener('focus', handleWindowFocus);
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+        };
+        
+        // Listen for window focus events (user comes back after save dialog)
+        const handleWindowFocus = () => {
+            // Short delay to let the save dialog finish
+            setTimeout(() => {
+                cleanupDownload(true);
+            }, 100);
+        };
+        
+        // Fallback: visibility change detection
+        const handleVisibilityChange = () => {
+            if (!document.hidden) {
+                setTimeout(() => {
+                    cleanupDownload(true);
+                }, 100);
+            }
+        };
+        
+        window.addEventListener('focus', handleWindowFocus, { once: true });
+        document.addEventListener('visibilitychange', handleVisibilityChange, { once: true });
+        
+        // Trigger the download
+        S3DownloadService.triggerDownload(decryptedBlob, item.name);
+        
+        // Shorter timeout to detect cancelled downloads faster
+        timeoutId = setTimeout(() => {
+            cleanupDownload(false);
+        }, 1500); // Reduced from 3000ms to 1500ms
+
+    } catch (error) {
+        console.error('Error downloading file:', error);
+        toast.error(`Error downloading file: ${error.message || 'Unknown error'}`);
+        
+        // Update queue status
+        const queueItem = downloadQueue.value.find(q => q.id === item.id);
+        if (queueItem) {
+            queueItem.status = 'failed';
+        }
     } finally {
         downloading.value[item.id] = false;
     }
+};
+
+const handleEncryptionKeySubmit = async (key: string) => {
+    if (!pendingDownload.value) return;
+    
+    // Add back to download queue
+    downloadQueue.value.push({
+        id: pendingDownload.value.id as number,
+        fileName: pendingDownload.value.name,
+        status: 'pending'
+    });
+    
+    // Close modal
+    showEncryptionKeyModal.value = false;
+    
+    // Perform download with provided key
+    await performDownload(pendingDownload.value, key);
+    
+    // Reset modal state
+    pendingDownload.value = null;
+    encryptionKey.value = '';
+    isFileEncrypted.value = false;
+};
+
+const cancelEncryptionKeyModal = () => {
+    showEncryptionKeyModal.value = false;
+    pendingDownload.value = null;
+    encryptionKey.value = '';
+    isFileEncrypted.value = false;
 };
 
 
@@ -303,15 +456,43 @@ async function processFile(file: File) {
         const fileId = `${file.name}-${file.size}-${Date.now()}`;
         uploadProgress.value[fileId] = 0;
 
+        // Add to upload queue
+        uploadQueue.value.push({
+            id: fileId,
+            fileName: file.name,
+            status: 'pending',
+            progress: 0
+        });
+
+        // Show upload modal if not already visible
+        if (uploadQueue.value.length === 1) {
+            showUploadModal.value = true;
+        }
+
+        // Update queue status
+        const queueItem = uploadQueue.value.find(q => q.id === fileId);
+        if (queueItem) {
+            queueItem.status = 'uploading';
+        }
+
         // Start timing the upload
         const startTime = performance.now();
 
         // Try to upload to S3
         let result = null;
         try {
-            result = await uploadService.uploadFile(file, "password", currentFolderId.value, (progress) => {
-                uploadProgress.value[fileId] = progress;
-            });
+            result = await uploadService.uploadFile(
+                file, 
+                "password", // Use default password for testing
+                currentFolderId.value, 
+                (progress) => {
+                    uploadProgress.value[fileId] = progress;
+                    if (queueItem) {
+                        queueItem.progress = progress;
+                    }
+                }
+                // Remove the false parameter - encryption is now default
+            );
         } catch (uploadError) {
             console.error('Upload failed:', uploadError);
             // Will handle this case below
@@ -325,15 +506,44 @@ async function processFile(file: File) {
 
         if (result) {
             toast.success(`Uploaded ${file.name} in ${duration.toFixed(2)}s`);
+            if (queueItem) {
+                queueItem.status = 'completed';
+                queueItem.progress = 100;
+            }
         } else {
             toast.info(`${file.name} saved locally and will upload when connection is available`);
+            if (queueItem) {
+                queueItem.status = 'failed';
+            }
         }
+
+        // Remove completed/failed items after delay
+        setTimeout(() => {
+            const index = uploadQueue.value.findIndex(q => q.id === fileId);
+            if (index !== -1) {
+                uploadQueue.value.splice(index, 1);
+            }
+            delete uploadProgress.value[fileId];
+            
+            // Hide modal if no more uploads
+            if (uploadQueue.value.length === 0) {
+                showUploadModal.value = false;
+            }
+        }, 3000);
 
         return result;
     } catch (error) {
         uploadsInProgress.value--;
         console.error('File processing failed:', error);
         toast.error(`Failed to process ${file.name}`);
+        
+        // Update queue status
+        const fileId = `${file.name}-${file.size}-${Date.now()}`;
+        const queueItem = uploadQueue.value.find(q => q.id === fileId);
+        if (queueItem) {
+            queueItem.status = 'failed';
+        }
+        
         return null;
     }
 }
@@ -356,7 +566,7 @@ const handleDrop = async (event: DragEvent) => {
         // Process files in batches
         for (let i = 0; i < filesToProcess.length; i += batchSize) {
             const batch = filesToProcess.slice(i, i + batchSize);
-            await Promise.all(batch.map(file => processFile(file)));
+            await Promise.all(batch.map((file) => processFile(file)));
         }
     } finally {
         await refreshFiles();
@@ -450,5 +660,134 @@ onUnmounted(() => {
                 Download
             </button>
         </div>
+
+        <!-- Download Progress Panel -->
+        <div v-if="downloadQueue.length > 0 || Object.keys(downloadProgress).length > 0" 
+             class="fixed bottom-5 left-5 bg-white shadow-lg rounded-lg p-4 w-80 max-h-64 overflow-y-auto">
+            <div class="flex items-center justify-between mb-3">
+                <h3 class="text-sm font-semibold text-gray-800 flex items-center">
+                    <ArrowDownTrayIcon class="w-4 h-4 mr-2" />
+                    Downloads ({{ downloadQueue.length }})
+                </h3>
+                <button @click="downloadQueue = []; Object.keys(downloadProgress).forEach(key => delete downloadProgress[key])" 
+                        class="text-gray-400 hover:text-gray-600">
+                    <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+                    </svg>
+                </button>
+            </div>
+            
+            <!-- Download Queue Items -->
+            <div v-for="queueItem in downloadQueue" :key="queueItem.id" class="mb-3 last:mb-0">
+                <div class="flex items-center justify-between mb-1">
+                    <span class="text-xs font-medium text-gray-700 truncate">{{ queueItem.fileName }}</span>
+                    <span class="text-xs px-2 py-1 rounded-full" 
+                          :class="{
+                              'bg-yellow-100 text-yellow-800': queueItem.status === 'pending',
+                              'bg-blue-100 text-blue-800': queueItem.status === 'downloading',
+                              'bg-green-100 text-green-800': queueItem.status === 'completed',
+                              'bg-red-100 text-red-800': queueItem.status === 'failed'
+                          }">
+                        {{ queueItem.status }}
+                    </span>
+                </div>
+                
+                <!-- Progress bar for downloading files -->
+                <div v-if="queueItem.status === 'downloading' && downloadProgress[queueItem.id]" 
+                     class="w-full bg-gray-200 rounded-full h-2">
+                    <div class="bg-blue-600 h-2 rounded-full transition-all duration-300" 
+                         :style="{ width: downloadProgress[queueItem.id].progress + '%' }">
+                    </div>
+                    <div class="text-xs text-gray-500 mt-1">
+                        {{ Math.round(downloadProgress[queueItem.id].progress) }}%
+                    </div>
+                </div>
+                
+                <!-- Simple progress indicator for pending -->
+                <div v-else-if="queueItem.status === 'pending'" class="w-full bg-gray-200 rounded-full h-2">
+                    <div class="bg-yellow-400 h-2 rounded-full w-0"></div>
+                </div>
+                
+                <!-- Completed indicator -->
+                <div v-else-if="queueItem.status === 'completed'" class="w-full bg-green-200 rounded-full h-2">
+                    <div class="bg-green-600 h-2 rounded-full w-full"></div>
+                </div>
+                
+                <!-- Failed indicator -->
+                <div v-else-if="queueItem.status === 'failed'" class="w-full bg-red-200 rounded-full h-2">
+                    <div class="bg-red-600 h-2 rounded-full w-full"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Upload Progress Panel -->
+        <div v-if="uploadQueue.length > 0" 
+             class="fixed bottom-20 right-5 bg-white shadow-lg rounded-lg p-4 w-80 max-h-64 overflow-y-auto">
+            <div class="flex items-center justify-between mb-3">
+                <h3 class="text-sm font-semibold text-gray-800 flex items-center">
+                    <svg class="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clip-rule="evenodd" />
+                    </svg>
+                    Uploads ({{ uploadQueue.length }})
+                </h3>
+                <button @click="showUploadModal = false; uploadQueue = []; Object.keys(uploadProgress).forEach(key => delete uploadProgress[key])" 
+                        class="text-gray-400 hover:text-gray-600">
+                    <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+                    </svg>
+                </button>
+            </div>
+            
+            <!-- Upload Queue Items -->
+            <div v-for="queueItem in uploadQueue" :key="queueItem.id" class="mb-3 last:mb-0">
+                <div class="flex items-center justify-between mb-1">
+                    <span class="text-xs font-medium text-gray-700 truncate">{{ queueItem.fileName }}</span>
+                    <span class="text-xs px-2 py-1 rounded-full" 
+                          :class="{
+                              'bg-yellow-100 text-yellow-800': queueItem.status === 'pending',
+                              'bg-blue-100 text-blue-800': queueItem.status === 'uploading',
+                              'bg-green-100 text-green-800': queueItem.status === 'completed',
+                              'bg-red-100 text-red-800': queueItem.status === 'failed'
+                          }">
+                        {{ queueItem.status }}
+                    </span>
+                </div>
+                
+                <!-- Progress bar for uploading files -->
+                <div v-if="queueItem.status === 'uploading' && queueItem.progress !== undefined" 
+                     class="w-full bg-gray-200 rounded-full h-2">
+                    <div class="bg-blue-600 h-2 rounded-full transition-all duration-300" 
+                         :style="{ width: queueItem.progress + '%' }">
+                    </div>
+                    <div class="text-xs text-gray-500 mt-1">
+                        {{ Math.round(queueItem.progress) }}%
+                    </div>
+                </div>
+                
+                <!-- Simple progress indicator for pending -->
+                <div v-else-if="queueItem.status === 'pending'" class="w-full bg-gray-200 rounded-full h-2">
+                    <div class="bg-yellow-400 h-2 rounded-full w-0"></div>
+                </div>
+                
+                <!-- Completed indicator -->
+                <div v-else-if="queueItem.status === 'completed'" class="w-full bg-green-200 rounded-full h-2">
+                    <div class="bg-green-600 h-2 rounded-full w-full"></div>
+                </div>
+                
+                <!-- Failed indicator -->
+                <div v-else-if="queueItem.status === 'failed'" class="w-full bg-red-200 rounded-full h-2">
+                    <div class="bg-red-600 h-2 rounded-full w-full"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Encryption Key Modal -->
+        <EncryptionKeyModal
+            :show="showEncryptionKeyModal"
+            :fileName="pendingDownload?.name"
+            v-model:encryptionKey="encryptionKey"
+            @submit="handleEncryptionKeySubmit"
+            @cancel="cancelEncryptionKeyModal"
+        />
     </div>
 </template>

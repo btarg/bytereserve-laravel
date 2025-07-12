@@ -97,6 +97,7 @@ class FileExplorerController extends Controller
                 'mime_type' => 'required|string|max:255',
                 'size' => 'required|integer',
                 'folder_id' => 'nullable|exists:folders,id',
+                'hash' => 'required|string|max:64',
             ]);
 
             // Debug log what we received
@@ -109,7 +110,7 @@ class FileExplorerController extends Controller
             $file->path = $validated['path']; // This is the S3 key
             $file->mime_type = $validated['mime_type'];
             $file->size = $validated['size'];
-
+            $file->hash = $validated['hash'];
             $file->save();
 
             // Update the folder size if this file is in a folder
@@ -215,18 +216,15 @@ class FileExplorerController extends Controller
                 return response()->json(['error' => 'Unauthorized'], 403);
             }
 
-            $cacheKey = "file_download_{$file->id}";
+            // Always generate a fresh presigned URL (no caching)
+            // This ensures we never serve expired URLs
             $cacheMinutes = (int)env('PRESIGNED_URL_CACHE_MINUTES', 15);
+            $downloadUrl = $file->getPresignedUrl($cacheMinutes);
 
-            return Cache::remember($cacheKey, now()->addMinutes($cacheMinutes), function () use ($file, $cacheMinutes) {
-                // Generate a presigned URL for the file
-                $downloadUrl = $file->getPresignedUrl($cacheMinutes);
-
-                return response()->json([
-                    'download_url' => $downloadUrl,
-                    'name' => $file->name
-                ]);
-            });
+            return response()->json([
+                'download_url' => $downloadUrl,
+                'name' => $file->name
+            ]);
         } catch (\Exception $e) {
             Log::error('File download failed', [
                 'error' => $e->getMessage(),
@@ -273,7 +271,6 @@ class FileExplorerController extends Controller
             if ($folderId) {
                 $this->invalidateFolderCache($folderId);
             }
-            Cache::forget("file_download_{$file->id}");
 
             // Delete from S3
             $s3Client = $this->getS3Client();
@@ -330,10 +327,6 @@ class FileExplorerController extends Controller
             // Invalidate all related caches
             foreach ($folderIds as $folderId) {
                 $this->invalidateFolderCache($folderId);
-            }
-
-            foreach ($fileIds as $fileId) {
-                Cache::forget("file_download_{$fileId}");
             }
 
             $this->invalidateExplorerCache('/');

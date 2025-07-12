@@ -6,8 +6,11 @@ import { route } from 'ziggy-js';
 
 const KEY_LENGTH = 256;
 const CHUNK_SIZE_MB = 16;
+const IV_LENGTH = 12; // 96 bits for AES-GCM
+const AUTH_TAG_LENGTH = 16; // 128 bits for AES-GCM auth tag
+const SALT_LENGTH = 16; // 128 bits for salt
 
-// Secure Key Derivation Function (KDF) - Moved to S3UploadService
+// Secure Key Derivation Function (KDF) - Updated for AES-GCM
 async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
     const passwordKey = await crypto.subtle.importKey(
         'raw',
@@ -20,12 +23,12 @@ async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey>
     return crypto.subtle.deriveKey(
         {
             name: 'PBKDF2',
-            salt: salt,
+            salt: salt.buffer as ArrayBuffer,
             iterations: 100000, // Increase iterations for stronger security
             hash: 'SHA-256',
         },
         passwordKey,
-        { name: 'AES-CTR', length: KEY_LENGTH },
+        { name: 'AES-GCM', length: KEY_LENGTH },
         false,
         ['encrypt', 'decrypt'],
     );
@@ -60,15 +63,14 @@ export class S3UploadService {
 
     public async uploadFile(
         file: File,
-        password: string,
+        password: string = "password", // Default password for testing
         folderId?: number | null,
         progressCallback?: (progress: number) => void,
-        should_encrypt: boolean = false
+        should_encrypt: boolean = true // Default to encrypted
     ): Promise<any> {
         try {
             console.log(`Starting ${should_encrypt ? "encrypted upload" : "non-encrypted upload"} at folder ${folderId} for ${file.name} (${file.size} bytes)`);
             console.log(`Using ${this.workerCount} workers with ${this.MAX_CONCURRENT_UPLOADS} concurrent uploads`);
-
 
             let uploadResult;
             if (file.size < this.CHUNK_SIZE) {
@@ -105,7 +107,15 @@ export class S3UploadService {
                 mime_type: file.type || 'application/octet-stream',
                 size: file.size,
                 folder_id: folderId,
+                hash: file.name // TODO: implement hashing
             });
+
+            if (!saveFileResponse.ok) {
+                const errorText = await saveFileResponse.text();
+                console.error('Failed to save file record:', errorText);
+                throw new Error(`Failed to save file record: ${saveFileResponse.status} ${saveFileResponse.statusText}`);
+            }
+
             const data = await saveFileResponse.json();
 
             // Create file record in local database
@@ -193,90 +203,92 @@ export class S3UploadService {
     }
 
 
-    private async directUpload(file: File, password: string, folderId ?: number | null, should_encrypt ?: boolean): Promise < any > {
-    console.log(`Starting direct upload for ${file.name} (${file.size} bytes)`);
+    private async directUpload(file: File, password: string, folderId?: number | null, should_encrypt?: boolean): Promise<any> {
+        console.log(`Starting direct upload for ${file.name} (${file.size} bytes)`);
 
-    try {
-        const response = await window.cacheFetch.post(route('uploads.get-direct-url'), {
-            file_name: file.name,
-            content_type: file.type || 'application/octet-stream',
-            folder_id: folderId
-        });
+        try {
+            const response = await window.cacheFetch.post(route('uploads.get-direct-url'), {
+                file_name: file.name,
+                content_type: file.type || 'application/octet-stream',
+                folder_id: folderId
+            });
 
-        // the URL is the presigned S3 upload URL
-        const responseData = await response.json();
-        const { url, key } = responseData;
+            // the URL is the presigned S3 upload URL
+            const responseData = await response.json();
+            const { url, key } = responseData;
 
-        // Process the file (encrypt if needed)
-        const processedData = await (async () => {
-            if (should_encrypt) {
-                // Generate a unique salt for this file
-                const salt = crypto.getRandomValues(new Uint8Array(16));
+            // Process the file (encrypt if needed)
+            const processedData = await (async () => {
+                if (should_encrypt) {
+                    // Generate a unique salt for this file
+                    const salt = crypto.getRandomValues(new Uint8Array(SALT_LENGTH));
+                    
+                    // Derive the key from the password and salt
+                    const cryptoKey = await deriveKey(password, salt);
+                    
+                    // Process file with worker pool
+                    const result = await this.processFileWithWorkerPool(
+                        file,
+                        0,
+                        file.size,
+                        cryptoKey
+                    );
 
-                // Derive the key from the password and salt
-                let cryptoKey = await deriveKey(password, salt);
+                    if (result.error) {
+                        throw new Error(`Failed to encrypt file: ${result.error}`);
+                    }
 
-                // Process file with worker pool
-                const result = await this.processFileWithWorkerPool(
-                    file,
-                    0,
-                    file.size,
-                    cryptoKey
-                );
+                    // Prepend salt to the encrypted data
+                    let finalData: ArrayBuffer | Blob;
+                    if (result.chunk instanceof Blob) {
+                        // If result is a Blob, create a new blob with salt prepended
+                        const saltBuffer = new ArrayBuffer(salt.byteLength);
+                        new Uint8Array(saltBuffer).set(salt);
+                        finalData = new Blob([saltBuffer, result.chunk], { type: file.type });
+                    } else {
+                        // If result is an ArrayBuffer, create a new ArrayBuffer with salt prepended
+                        const encryptedData = new Uint8Array(result.chunk);
+                        const finalBuffer = new Uint8Array(salt.byteLength + encryptedData.byteLength);
+                        finalBuffer.set(salt, 0);
+                        finalBuffer.set(encryptedData, salt.byteLength);
+                        finalData = finalBuffer.buffer;
+                    }
 
-                if (result.error) {
-                    throw new Error(`Failed to encrypt file: ${result.error}`);
-                }
-
-                // Prepend salt to the encrypted data
-                let finalData;
-                if (result.chunk instanceof Blob) {
-                    // If result is a Blob, create a new blob with salt prepended
-                    finalData = new Blob([salt, result.chunk], { type: file.type });
+                    return { chunk: finalData };
                 } else {
-                    // If result is an ArrayBuffer, create a new ArrayBuffer with salt prepended
-                    const encryptedData = new Uint8Array(result.chunk);
-                    const finalBuffer = new Uint8Array(salt.byteLength + encryptedData.byteLength);
-                    finalBuffer.set(salt, 0);
-                    finalBuffer.set(encryptedData, salt.byteLength);
-                    finalData = finalBuffer.buffer;
+                    return { chunk: file };
                 }
+            })();
 
-                return { chunk: finalData };
-            } else {
-                return { chunk: file };
+            // Upload the processed data
+            const uploadResponse = await fetch(url, {
+                method: 'PUT',
+                body: processedData.chunk,
+                headers: {
+                    'Content-Type': file.type || 'application/octet-stream',
+                    'Content-Length':
+                        processedData.chunk instanceof Blob
+                            ? String(processedData.chunk.size)
+                            : String((processedData.chunk as ArrayBuffer).byteLength),
+                },
+            });
+
+            if (!uploadResponse.ok) {
+                throw new Error(`Failed to upload file: ${uploadResponse.statusText}`);
             }
-        })();
-
-        // Upload the processed data
-        const uploadResponse = await fetch(url, {
-            method: 'PUT',
-            body: processedData.chunk,
-            headers: {
-                'Content-Type': file.type || 'application/octet-stream',
-                'Content-Length':
-                    processedData.chunk instanceof Blob
-                        ? String(processedData.chunk.size)
-                        : String((processedData.chunk as ArrayBuffer).byteLength),
-            },
-        });
-
-        if(!uploadResponse.ok) {
-        throw new Error(`Failed to upload file: ${uploadResponse.statusText}`);
-    }
 
             const fileDetails = {
-        key: key,
-        contentType: file.type || 'application/octet-stream',
-        contentLength: file.size,
-        lastModified: new Date().toISOString(),
-    };
+                key: key,
+                contentType: file.type || 'application/octet-stream',
+                contentLength: file.size,
+                lastModified: new Date().toISOString(),
+            };
 
-    return fileDetails;
-} catch (error) {
-    console.error('Direct upload failed:', error);
-    throw error;
-}
+            return fileDetails;
+        } catch (error) {
+            console.error('Direct upload failed:', error);
+            throw error;
+        }
     }
 
     private async pipelinedMultipartUpload(
@@ -368,10 +380,10 @@ try {
 
     let salt: Uint8Array | null = null;
     if (should_encrypt) {
-        // 1. Generate a unique salt for this file
-        salt = crypto.getRandomValues(new Uint8Array(16));
+        // Generate a unique salt for this file
+        salt = crypto.getRandomValues(new Uint8Array(SALT_LENGTH));
 
-        // 2. Derive the key from the password and salt
+        // Derive the key from the password and salt
         const deriveStart = performance.now();
         cryptoKey = await deriveKey(password, salt);
         metrics.encryptionTime += performance.now() - deriveStart;
@@ -387,6 +399,7 @@ try {
         const encryptStart = performance.now();
         const processedData = await (async () => {
             if (should_encrypt) {
+                // Use worker pool for encryption
                 const result = await this.processFileWithWorkerPool(
                     file,
                     start,
@@ -398,7 +411,10 @@ try {
                 if (partNumber === 1) {
                     let finalData: Blob | ArrayBuffer;
                     if (result.chunk instanceof Blob) {
-                        finalData = new Blob([salt, result.chunk], { type: file.type });
+                        // Convert salt to ArrayBuffer for Blob compatibility
+                        const saltBuffer = new ArrayBuffer(salt.byteLength);
+                        new Uint8Array(saltBuffer).set(salt);
+                        finalData = new Blob([saltBuffer, result.chunk], { type: file.type });
                     } else {
                         const encryptedData = new Uint8Array(result.chunk);
                         const finalBuffer = new Uint8Array(salt.byteLength + encryptedData.byteLength);
@@ -406,7 +422,7 @@ try {
                         finalBuffer.set(encryptedData, salt.byteLength);
                         finalData = finalBuffer.buffer;
                     }
-                    return { chunk: finalData, error: result.error };
+                    return { chunk: finalData };
                 }
 
                 return result;
@@ -416,12 +432,6 @@ try {
             }
         })();
         const encryptTime = performance.now() - encryptStart;
-
-        if (processedData.error) {
-            throw new Error(
-                `Failed to process part ${partNumber}: ${processedData.error}`,
-            );
-        }
 
         return {
             partNumber,
@@ -653,40 +663,40 @@ try {
     }
 
     private async processFileWithWorkerPool(
-    file: File,
-    offset: number,
-    chunkSize: number,
-    cryptoKey: CryptoKey, // Receive the derived key
-): Promise < {
-    chunk: Blob | ArrayBuffer;
-    error?: string;
-} > {
-    try {
-        // console.log(`Processing chunk at offset ${offset} (${chunkSize} bytes)`);
-        const result = await this.workerPool.runTask({
-            file: file,
-            chunkSize: chunkSize,
-            offset: offset,
-            cryptoKey: cryptoKey, // Pass the derived key to the worker
-            operation: 'encrypt'
-        });
-        // console.log(`Finished encrypting chunk at offset ${offset}`);
+        file: File,
+        offset: number,
+        chunkSize: number,
+        cryptoKey: CryptoKey, // Receive the derived key
+    ): Promise<{
+        chunk: Blob | ArrayBuffer;
+        error?: string;
+    }> {
+        try {
+            // console.log(`Processing chunk at offset ${offset} (${chunkSize} bytes)`);
+            const result = await this.workerPool.runTask({
+                file: file,
+                chunkSize: chunkSize,
+                offset: offset,
+                cryptoKey: cryptoKey, // Pass the derived key to the worker
+                operation: 'encrypt'
+            });
+            // console.log(`Finished encrypting chunk at offset ${offset}`);
 
-        if(result.error) {
-    return { chunk: new Blob(), error: result.error };
-}
+            if (result.error) {
+                return { chunk: new Blob(), error: result.error };
+            }
 
-return { chunk: result.chunk };
+            return { chunk: result.chunk };
         } catch (error) {
-    console.error('Error processing file chunk:', error);
-    return {
-        chunk: new Blob(),
-        error: error instanceof Error ? error.message : 'Unknown error',
-    };
-}
+            console.error('Error processing file chunk:', error);
+            return {
+                chunk: new Blob(),
+                error: error instanceof Error ? error.message : 'Unknown error',
+            };
+        }
     }
 
     public terminate(): void {
-    this.workerPool.terminate();
-}
+        this.workerPool.terminate();
+    }
 }

@@ -13,28 +13,27 @@ const readBufferChunk = (
 };
 
 /**
- * Encrypts a chunk using AES-CTR
- * Format: [16-byte IV][encrypted data]
+ * Encrypts a chunk using AES-GCM
+ * Format: [12-byte IV][encrypted data with auth tag]
  */
 async function encryptChunk(
     chunk: ArrayBuffer,
     key: CryptoKey,
 ): Promise<Uint8Array> {
-    // Generate a random 16-byte IV for AES-CTR
-    const iv = crypto.getRandomValues(new Uint8Array(16));
+    // Generate a random 12-byte IV for AES-GCM
+    const iv = crypto.getRandomValues(new Uint8Array(12));
 
-    // Encrypt the data using AES-CTR with the provided key and IV
+    // Encrypt the data using AES-GCM with the provided key and IV
     const encrypted = await crypto.subtle.encrypt(
         {
-            name: 'AES-CTR',
-            counter: iv,
-            length: 128,
+            name: 'AES-GCM',
+            iv: iv,
         },
         key,
         chunk,
     );
 
-    // Combine IV and encrypted data into a single buffer
+    // Combine IV and encrypted data (which includes auth tag) into a single buffer
     const output = new Uint8Array(iv.byteLength + encrypted.byteLength);
     output.set(iv);
     output.set(new Uint8Array(encrypted), iv.byteLength);
@@ -43,24 +42,23 @@ async function encryptChunk(
 }
 
 /**
- * Decrypts a chunk using AES-CTR
- * Expected format: [16-byte IV][encrypted data]
+ * Decrypts a chunk using AES-GCM
+ * Expected format: [12-byte IV][encrypted data with auth tag]
  */
 async function decryptChunk(
     chunk: ArrayBuffer,
     key: CryptoKey,
 ): Promise<ArrayBuffer> {
-    // Extract the IV (first 16 bytes)
+    // Extract the IV (first 12 bytes)
     const data = new Uint8Array(chunk);
-    const iv = data.slice(0, 16);
-    const encrypted = data.slice(16);
+    const iv = data.slice(0, 12);
+    const encrypted = data.slice(12);
 
-    // Decrypt the data using AES-CTR with the provided key and extracted IV
+    // Decrypt the data using AES-GCM with the provided key and extracted IV
     return await crypto.subtle.decrypt(
         {
-            name: 'AES-CTR',
-            counter: iv,
-            length: 128,
+            name: 'AES-GCM',
+            iv: iv,
         },
         key,
         encrypted,
