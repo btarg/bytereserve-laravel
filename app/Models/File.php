@@ -18,7 +18,12 @@ class File extends Model
         'path',
         'mime_type',
         'size',
-        'hash'
+        'hash',
+        'expires_at'
+    ];
+
+    protected $casts = [
+        'expires_at' => 'datetime'
     ];
 
     public function user(): BelongsTo
@@ -74,5 +79,45 @@ class File extends Model
     public function getPreviewUrl($expiresIn = 15): string
     {
         return $this->getPresignedUrl($expiresIn, true);
+    }
+
+    /**
+     * Check if the file has expired
+     */
+    public function hasExpired(): bool
+    {
+        if (!$this->expires_at) {
+            return false;
+        }
+
+        return $this->expires_at->isPast();
+    }
+
+    /**
+     * Check if the file is valid (not expired)
+     */
+    public function isValid(): bool
+    {
+        return !$this->hasExpired();
+    }
+
+    /**
+     * Scope to find expired files
+     */
+    public function scopeExpired($query)
+    {
+        return $query->where('expires_at', '<', now())
+                    ->whereNotNull('expires_at');
+    }
+
+    /**
+     * Scope to find valid (non-expired) files
+     */
+    public function scopeValid($query)
+    {
+        return $query->where(function ($query) {
+            $query->where('expires_at', '>', now())
+                  ->orWhereNull('expires_at');
+        });
     }
 }

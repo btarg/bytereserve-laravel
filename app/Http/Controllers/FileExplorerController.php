@@ -35,6 +35,7 @@ class FileExplorerController extends Controller
             $currentFolderId = null;
             $files = File::where('user_id', $user->id)
                 ->where('folder_id', null)
+                ->valid() // Only include non-expired files
                 ->get()
                 ->map(function ($file) {
                     $file->type = 'file'; // Explicitly mark as file
@@ -63,6 +64,7 @@ class FileExplorerController extends Controller
 
             $currentFolderId = $currentFolder->id;
             $files = File::where('folder_id', $currentFolder->id)
+                ->valid() // Only include non-expired files
                 ->get()
                 ->map(function ($file) {
                     $file->type = 'file'; // Explicitly mark as file
@@ -99,6 +101,7 @@ class FileExplorerController extends Controller
                 'size' => 'required|integer',
                 'folder_id' => 'nullable|exists:folders,id',
                 'hash' => 'required|string|max:64',
+                'expires_at' => 'nullable|date|after:now',
             ]);
 
             // Debug log what we received
@@ -112,6 +115,7 @@ class FileExplorerController extends Controller
             $file->mime_type = $validated['mime_type'];
             $file->size = $validated['size'];
             $file->hash = $validated['hash'];
+            $file->expires_at = $validated['expires_at'] ?? null;
             $file->save();
 
             // Update the folder size if this file is in a folder

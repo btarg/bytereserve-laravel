@@ -3,12 +3,14 @@ import { nextTick, ref, watch } from 'vue';
 import {
     ArrowDownTrayIcon,
     TrashIcon,
-    FolderPlusIcon
+    FolderPlusIcon,
+    ArrowUpTrayIcon
 } from '@heroicons/vue/24/outline';
 import { UIFileEntry } from '../../types';
 import { route } from 'ziggy-js';
 import { Files, Folders } from '@/util/database/ModelRegistry';
 import { storeNewFolder } from '@/util/uploads/FolderManagement';
+import UploadConfigModal from './UploadConfigModal.vue';
 
 const props = defineProps<{
     selectedItems: UIFileEntry[];
@@ -18,13 +20,18 @@ const props = defineProps<{
 const emit = defineEmits<{
     (e: 'path-change', path: string): void;
     (e: 'refresh-files', forceSync?: boolean): void;
+    (e: 'upload-files', files: FileList, config: any): void;
 }>();
 
 const isCreatingFolder = ref(false);
 const newFolderName = ref('');
 const downloading = ref(false);
+const showUploadModal = ref(false);
+const pendingFiles = ref<FileList | null>(null);
+const encryptionKey = ref('');
 
 const newFolderInput = ref<HTMLInputElement | null>(null);
+const fileInput = ref<HTMLInputElement | null>(null);
 
 // Watch for changes to isCreatingFolder
 watch(isCreatingFolder, async (newValue) => {
@@ -134,6 +141,45 @@ const deleteSelectedItems = async () => {
     }
 };
 
+const triggerFileUpload = () => {
+    fileInput.value?.click();
+};
+
+const handleFileSelection = (event: Event) => {
+    const target = event.target as HTMLInputElement;
+    if (target.files && target.files.length > 0) {
+        pendingFiles.value = target.files;
+        showUploadModal.value = true;
+    }
+};
+
+const handleUploadSubmit = (config: any) => {
+    if (pendingFiles.value) {
+        // Close modal immediately to prevent spam clicking
+        showUploadModal.value = false;
+        const filesToUpload = pendingFiles.value;
+        pendingFiles.value = null;
+        
+        // Reset the file input
+        if (fileInput.value) {
+            fileInput.value.value = '';
+        }
+        
+        // Emit the upload event
+        emit('upload-files', filesToUpload, config);
+    }
+};
+
+const handleUploadCancel = () => {
+    showUploadModal.value = false;
+    pendingFiles.value = null;
+    
+    // Reset the file input
+    if (fileInput.value) {
+        fileInput.value.value = '';
+    }
+};
+
 
 </script>
 
@@ -162,6 +208,22 @@ const deleteSelectedItems = async () => {
                 </button>
             </form>
 
+            <!-- Upload Button -->
+            <button @click="triggerFileUpload"
+                class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">
+                <ArrowUpTrayIcon class="w-5 h-5 mr-2" />
+                Upload Files
+            </button>
+
+            <!-- Hidden file input -->
+            <input
+                ref="fileInput"
+                type="file"
+                multiple
+                @change="handleFileSelection"
+                class="hidden"
+            />
+
             <!-- Download Button -->
             <button :disabled="selectedItems.filter(item => item.type === 'file').length === 0"
                 @click="downloadSelectedFiles"
@@ -181,5 +243,13 @@ const deleteSelectedItems = async () => {
                 Delete
             </button>
         </div>
+
+        <!-- Upload Configuration Modal -->
+        <UploadConfigModal
+            :show="showUploadModal"
+            v-model:encryptionKey="encryptionKey"
+            @submit="handleUploadSubmit"
+            @cancel="handleUploadCancel"
+        />
     </div>
 </template>

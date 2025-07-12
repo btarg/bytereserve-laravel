@@ -235,6 +235,9 @@ const generateShareUrl = async () => {
         
         shareUrl.value = url;
         copied.value = false;
+        
+        // Automatically copy to clipboard when URL is generated
+        await copyToClipboard();
     } catch (error) {
         console.error('Error generating share URL:', error);
     }
@@ -251,13 +254,6 @@ const copyToClipboard = async () => {
         }, 2000);
     } catch (error) {
         console.error('Error copying to clipboard:', error);
-        // Fallback for older browsers
-        urlInput.value?.select();
-        document.execCommand('copy');
-        copied.value = true;
-        setTimeout(() => {
-            copied.value = false;
-        }, 2000);
     }
 };
 

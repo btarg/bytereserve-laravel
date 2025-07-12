@@ -16,6 +16,7 @@ import { S3DownloadService } from "@/util/downloads/S3DownloadService";
 import EncryptionKeyModal from "./EncryptionKeyModal.vue";
 import ShareModal from "./ShareModal.vue";
 import FileTypeIcon from "./FileTypeIcon.vue";
+import UploadConfigModal from "./UploadConfigModal.vue";
 import { useToast } from "vue-toastification";
 import { route } from 'ziggy-js';
 import { formatFileSize } from '@/util/FormattingUtils';
@@ -58,6 +59,11 @@ const isFileEncrypted = ref(false);
 const showShareModal = ref(false);
 const shareItem = ref<UIFileEntry | null>(null);
 
+// Drag and drop upload modal state
+const showDragUploadModal = ref(false);
+const pendingDragFiles = ref<FileList | null>(null);
+const dragEncryptionKey = ref('');
+
 const refreshFiles = async (forceSync = false) => {
     console.log("Refreshing files, forceSync:", forceSync);
     selectedItems.value = [];
@@ -66,8 +72,27 @@ const refreshFiles = async (forceSync = false) => {
     await fetchItems(forceSync);
 };
 
+const handleUploadFiles = async (files: FileList, config: any) => {
+    console.log("Processing uploaded files with config:", config);
+    
+    const filesToProcess = Array.from(files);
+    uploadsInProgress.value = filesToProcess.length;
+
+    try {
+        // Process files in batches with the configuration
+        const batchSize = 5;
+        for (let i = 0; i < filesToProcess.length; i += batchSize) {
+            const batch = filesToProcess.slice(i, i + batchSize);
+            await Promise.all(batch.map((file) => processFileWithConfig(file, config)));
+        }
+    } finally {
+        await refreshFiles();
+    }
+};
+
 defineExpose({
-    refreshFiles
+    refreshFiles,
+    handleUploadFiles
 });
 
 const handleItemClick = async (item: UIFileEntry) => {
@@ -506,6 +531,15 @@ const handleDragLeave = (event: DragEvent) => {
 
 
 async function processFile(file: File) {
+    return processFileWithConfig(file, {
+        useEncryption: true,
+        encryptionKey: 'password',
+        useExpiry: false,
+        expiryTime: null
+    });
+}
+
+async function processFileWithConfig(file: File, config: any) {
     try {
         // Initialize progress tracking
         const fileId = `${file.name}-${file.size}-${Date.now()}`;
@@ -533,20 +567,29 @@ async function processFile(file: File) {
         // Start timing the upload
         const startTime = performance.now();
 
+        // Determine encryption settings
+        const encryptionKey = config.useEncryption ? config.encryptionKey : '';
+        const shouldEncrypt = config.useEncryption && encryptionKey.length > 0;
+
+        // Parse expiry time if provided
+        const expiryTime = config.useExpiry && config.expiryTime ? 
+            (config.expiryTime instanceof Date ? config.expiryTime : new Date(config.expiryTime)) : null;
+
         // Try to upload to S3
         let result = null;
         try {
             result = await uploadService.uploadFile(
                 file, 
-                "password", // Use default password for testing
+                encryptionKey || "password", // Use provided key or default
                 currentFolderId.value, 
                 (progress) => {
                     uploadProgress.value[fileId] = progress;
                     if (queueItem) {
                         queueItem.progress = progress;
                     }
-                }
-                // Remove the false parameter - encryption is now default
+                },
+                shouldEncrypt,
+                expiryTime // Pass expiry time as Date object
             );
         } catch (uploadError) {
             console.error('Upload failed:', uploadError);
@@ -560,7 +603,8 @@ async function processFile(file: File) {
         uploadsInProgress.value--;
 
         if (result) {
-            toast.success(`Uploaded ${file.name} in ${duration.toFixed(2)}s`);
+            const encryptionStatus = shouldEncrypt ? ' (encrypted)' : '';
+            toast.success(`Uploaded ${file.name}${encryptionStatus} in ${duration.toFixed(2)}s`);
             if (queueItem) {
                 queueItem.status = 'completed';
                 queueItem.progress = 100;
@@ -611,21 +655,43 @@ const handleDrop = async (event: DragEvent) => {
     const droppedFiles = event.dataTransfer?.files;
     if (!droppedFiles?.length) return;
 
-    uploadsInProgress.value = droppedFiles.length;
+    // Store the dropped files and show the upload configuration modal
+    pendingDragFiles.value = droppedFiles;
+    showDragUploadModal.value = true;
+};
 
-    // Process files concurrently but limit the number
-    const filesToProcess = Array.from(droppedFiles);
-    const batchSize = 5;
+const handleDragUploadSubmit = async (config: { useEncryption: boolean; encryptionKey: string; useExpiry: boolean; expiryTime: Date | null }) => {
+    if (!pendingDragFiles.value) return;
+
+    const files = Array.from(pendingDragFiles.value);
+    uploadsInProgress.value = files.length;
+
+    // Close the modal immediately after starting upload
+    showDragUploadModal.value = false;
+    const filesToProcess = pendingDragFiles.value;
+    pendingDragFiles.value = null;
 
     try {
-        // Process files in batches
-        for (let i = 0; i < filesToProcess.length; i += batchSize) {
-            const batch = filesToProcess.slice(i, i + batchSize);
-            await Promise.all(batch.map((file) => processFile(file)));
+        // Process files concurrently but limit the number
+        const batchSize = 5;
+        
+        for (let i = 0; i < files.length; i += batchSize) {
+            const batch = files.slice(i, i + batchSize);
+            await Promise.all(batch.map((file) => processFileWithConfig(file, {
+                useEncryption: config.useEncryption,
+                encryptionKey: config.encryptionKey,
+                useExpiry: config.useExpiry,
+                expiryTime: config.expiryTime // Pass Date object directly
+            })));
         }
     } finally {
         await refreshFiles();
     }
+};
+
+const handleDragUploadCancel = () => {
+    showDragUploadModal.value = false;
+    pendingDragFiles.value = null;
 };
 
 
@@ -873,6 +939,15 @@ onUnmounted(() => {
             :fileName="shareItem?.name"
             :fileId="shareItem?.id"
             @cancel="closeShareModal"
+        />
+
+        <!-- Upload Config Modal for Drag and Drop -->
+        <UploadConfigModal
+            :show="showDragUploadModal"
+            :encryptionKey="dragEncryptionKey"
+            @submit="handleDragUploadSubmit"
+            @cancel="handleDragUploadCancel"
+            @update:encryptionKey="dragEncryptionKey = $event"
         />
     </div>
 </template>

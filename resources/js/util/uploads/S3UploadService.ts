@@ -66,7 +66,8 @@ export class S3UploadService {
         password: string = "password", // Default password for testing
         folderId?: number | null,
         progressCallback?: (progress: number) => void,
-        should_encrypt: boolean = true // Default to encrypted
+        should_encrypt: boolean = true, // Default to encrypted
+        expiresAt?: Date | null // Optional expiry time
     ): Promise<any> {
         try {
             console.log(`Starting ${should_encrypt ? "encrypted upload" : "non-encrypted upload"} at folder ${folderId} for ${file.name} (${file.size} bytes)`);
@@ -74,14 +75,15 @@ export class S3UploadService {
 
             let uploadResult;
             if (file.size < this.CHUNK_SIZE) {
-                uploadResult = await this.directUpload(file, password, folderId, should_encrypt);
+                uploadResult = await this.directUpload(file, password, folderId, should_encrypt, expiresAt);
             } else {
                 uploadResult = await this.pipelinedMultipartUpload(
                     file,
                     password,
                     progressCallback,
                     folderId,
-                    should_encrypt
+                    should_encrypt,
+                    expiresAt
                 );
             }
 
@@ -107,7 +109,8 @@ export class S3UploadService {
                 mime_type: file.type || 'application/octet-stream',
                 size: file.size,
                 folder_id: folderId,
-                hash: file.name // TODO: implement hashing
+                hash: file.name, // TODO: implement hashing
+                expires_at: expiresAt ? expiresAt.toISOString() : null
             });
 
             if (!saveFileResponse.ok) {
@@ -203,7 +206,7 @@ export class S3UploadService {
     }
 
 
-    private async directUpload(file: File, password: string, folderId?: number | null, should_encrypt?: boolean): Promise<any> {
+    private async directUpload(file: File, password: string, folderId?: number | null, should_encrypt?: boolean, expiresAt?: Date | null): Promise<any> {
         console.log(`Starting direct upload for ${file.name} (${file.size} bytes)`);
 
         try {
@@ -296,7 +299,8 @@ export class S3UploadService {
     password: string,
     progressCallback ?: (progress: number) => void,
     folderId ?: number | null,
-    should_encrypt ?: boolean
+    should_encrypt ?: boolean,
+    expiresAt?: Date | null
 ): Promise < any > {
     const totalStart = performance.now();
     const totalChunks = Math.ceil(file.size / this.CHUNK_SIZE);
