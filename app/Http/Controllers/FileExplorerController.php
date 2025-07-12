@@ -558,6 +558,52 @@ class FileExplorerController extends Controller
     }
 
     /**
+     * Get share status for a file
+     */
+    public function getShareStatus(File $file)
+    {
+        try {
+            // Check if user has access to this file
+            if ($file->user_id !== Auth::id()) {
+                return response()->json(['error' => 'Unauthorized'], 403);
+            }
+
+            // Find existing share for this file
+            $share = FileShare::where('file_id', $file->id)
+                ->where('user_id', Auth::id())
+                ->first();
+
+            if (!$share) {
+                // No share exists, return default state
+                return response()->json([
+                    'exists' => false,
+                    'is_active' => false,
+                    'download_count' => 0,
+                    'max_downloads' => null,
+                    'token' => null
+                ]);
+            }
+
+            return response()->json([
+                'exists' => true,
+                'is_active' => $share->is_active,
+                'download_count' => $share->download_count,
+                'max_downloads' => $share->max_downloads,
+                'token' => $share->token,
+                'expires_at' => $share->expires_at?->toISOString()
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Failed to get share status', [
+                'error' => $e->getMessage(),
+                'file_id' => $file->id,
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json(['error' => 'Failed to get share status'], 500);
+        }
+    }
+
+    /**
      * Helper method to invalidate explorer cache for a path
      */
     private function invalidateExplorerCache($path)

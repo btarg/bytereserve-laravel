@@ -76,7 +76,19 @@ Route::prefix('api')->middleware('auth')->group(function () {
     Route::post('/files', [FileExplorerController::class, 'storeFile'])->name('files.store');
     Route::post('/folders', [FileExplorerController::class, 'storeFolder'])->name('folders.store');
     Route::get('/files/{file}/download', [FileExplorerController::class, 'download'])->name('files.download.{file}');
-    Route::post('/files/{file}/share', [FileExplorerController::class, 'shareFile'])->name('files.share');
+    // File management routes
+    Route::get('/files', [FileExplorerController::class, 'index'])->name('explorer.index');
+    Route::post('/files', [FileExplorerController::class, 'storeFile'])->name('files.store');
+    Route::get('/files/{file}/download', [FileExplorerController::class, 'download'])->name('files.download');
+    Route::delete('/files/{file}', [FileExplorerController::class, 'destroyFile'])->name('files.destroy');
+    
+    // Folder management routes
+    Route::post('/folders', [FileExplorerController::class, 'storeFolder'])->name('folders.store');
+    Route::delete('/folders/{folder}', [FileExplorerController::class, 'destroyFolder'])->name('folders.destroy');
+    
+    // Share management routes
+    Route::get('/files/{file}/share', [FileExplorerController::class, 'getShareStatus'])->name('files.share');
+    Route::post('/files/{file}/share', [FileExplorerController::class, 'shareFile'])->name('files.share.create');
     Route::put('/files/{file}/share', [FileExplorerController::class, 'updateShare'])->name('files.share.update');
     Route::delete('/files/{file}', [FileExplorerController::class, 'destroyFile'])->name('files.destroy.{file}');
     Route::delete('/folders/{folder}', [FileExplorerController::class, 'destroyFolder'])->name('folders.destroy.{folder}');
