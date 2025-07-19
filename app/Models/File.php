@@ -1,5 +1,4 @@
 <?php
-// filepath: /c:/Users/BenTa/Documents/Laravel/chirper/app/Models/File.php
 namespace App\Models;
 
 use App\Traits\S3Capable;
@@ -16,9 +15,15 @@ class File extends Model
         'user_id',
         'folder_id',
         'name',
-        'path', // This is now both the display path and S3 key
+        'path',
         'mime_type',
         'size',
+        'hash',
+        'expires_at'
+    ];
+
+    protected $casts = [
+        'expires_at' => 'datetime'
     ];
 
     public function user(): BelongsTo
@@ -34,26 +39,85 @@ class File extends Model
     /**
      * Get a short-lived presigned URL for the file
      */
-    public function getPresignedUrl($expiresIn = 15): string
+    public function getPresignedUrl($expiresIn = 15, $forPreview = false): string
     {
-        $cacheKey = "file_url_{$this->id}";
+        $cacheKey = "file_url_{$this->id}_" . ($forPreview ? 'preview' : 'download');
 
-        return Cache::remember($cacheKey, $expiresIn * 60, function () use ($expiresIn) {
+        return Cache::remember($cacheKey, $expiresIn * 60, function () use ($expiresIn, $forPreview) {
             $s3Client = $this->getS3Client();
             if (!$s3Client) {
                 return '';
             }
 
-            // Create a presigned URL that will expire
-            $command = $s3Client->getCommand('GetObject', [
+            $commandParams = [
                 'Bucket' => $this->getS3Bucket(),
                 'Key' => $this->path, // Using path directly as the S3 key
-                'ResponseContentDisposition' => 'attachment; filename="' . $this->name . '"',
-            ]);
+            ];
+
+            if ($forPreview) {
+                // For previews, serve inline with proper content type
+                $commandParams['ResponseContentType'] = $this->mime_type;
+                $commandParams['ResponseContentDisposition'] = 'inline; filename="' . $this->name . '"';
+            } else {
+                // For downloads, force attachment with proper content type
+                $commandParams['ResponseContentType'] = $this->mime_type;
+                $commandParams['ResponseContentDisposition'] = 'attachment; filename="' . $this->name . '"';
+            }
+
+            // Create a presigned URL that will expire
+            $command = $s3Client->getCommand('GetObject', $commandParams);
 
             $presignedRequest = $s3Client->createPresignedRequest($command, "+{$expiresIn} minutes");
 
             return (string) $presignedRequest->getUri();
+        });
+    }
+
+    /**
+     * Get a short-lived presigned URL for preview (inline display)
+     */
+    public function getPreviewUrl($expiresIn = 15): string
+    {
+        return $this->getPresignedUrl($expiresIn, true);
+    }
+
+    /**
+     * Check if the file has expired
+     */
+    public function hasExpired(): bool
+    {
+        if (!$this->expires_at) {
+            return false;
+        }
+
+        return $this->expires_at->isPast();
+    }
+
+    /**
+     * Check if the file is valid (not expired)
+     */
+    public function isValid(): bool
+    {
+        return !$this->hasExpired();
+    }
+
+    /**
+     * Scope to find expired files
+     */
+    public function scopeExpired($query)
+    {
+        return $query->where('expires_at', '<', now())
+                    ->whereNotNull('expires_at');
+    }
+
+    /**
+     * Scope to find valid (non-expired) files
+     */
+    public function scopeValid($query)
+    {
+        return $query->where(function ($query) {
+            $query->where('expires_at', '>', now())
+                  ->orWhereNull('expires_at');
         });
     }
 }

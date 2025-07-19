@@ -21,11 +21,11 @@ const getPathUpTo = (index: number): string => {
 </script>
 
 <template>
-    <div class="bg-white border-b border-gray-200 px-6 py-3">
+    <div class="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-3 transition-colors duration-200">
         <nav class="flex items-center space-x-2 text-sm">
             <button
                 @click="emit('path-change', '/')"
-                class="flex items-center text-gray-600 hover:text-gray-900"
+                class="flex items-center text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors duration-200 p-1 rounded"
             >
                 <HomeIcon class="w-4 h-4" />
             </button>
@@ -33,12 +33,12 @@ const getPathUpTo = (index: number): string => {
             <template v-for="(segment, index) in pathSegments" :key="index">
                 <ChevronRightIcon
                     v-if="index > 0"
-                    class="w-4 h-4 text-gray-400"
+                    class="w-4 h-4 text-gray-400 dark:text-gray-500"
                 />
                 <button
                     v-if="segment"
                     @click="emit('path-change', getPathUpTo(index))"
-                    class="text-gray-600 hover:text-gray-900"
+                    class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors duration-200 px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
                 >
                     {{ segment }}
                 </button>

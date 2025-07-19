@@ -1,4 +1,4 @@
-﻿export interface FileItem {
+﻿export interface UIFileEntry {
     id: number;
     name: string;
     type: 'file' | 'folder';
@@ -7,4 +7,5 @@
     path: string;
     url?: string | null;
     mime_type?: string | null;
+    hash?: string;
 }

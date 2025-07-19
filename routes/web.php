@@ -1,13 +1,20 @@
 <?php
 
-use App\Http\Controllers\Auth\SolveProviderConflictController;
-use App\Http\Controllers\Auth\SocialiteController;
-use App\Http\Controllers\S3UploadController;
-use App\Http\Controllers\ProfileController;
-use App\Http\Controllers\FileExplorerController;
+use Inertia\Inertia;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Route;
-use Inertia\Inertia;
+use App\Http\Controllers\Auth\SocialiteController;
+
+
+use App\Http\Controllers\Auth\SolveProviderConflictController;
+use App\Http\Controllers\S3UploadController;
+use App\Http\Controllers\ProfileController;
+
+
+use App\Http\Controllers\FileExplorerController;
+use App\Http\Controllers\FileSyncController;
+use App\Http\Controllers\FolderSyncController;
+
 
 Route::get('/', function () {
     return Inertia::render('Welcome', [
@@ -62,8 +69,6 @@ Route::prefix('api/uploads')->group(function () {
         ->name('uploads.complete-multipart');
     Route::post('/multipart/abort', [S3UploadController::class, 'abortMultipartUpload'])
         ->name('uploads.abort-multipart');
-    Route::post('/details', [S3UploadController::class, 'getFileDetails'])
-        ->name('uploads.details');
 });
 
 Route::prefix('api')->middleware('auth')->group(function () {
@@ -71,8 +76,30 @@ Route::prefix('api')->middleware('auth')->group(function () {
     Route::post('/files', [FileExplorerController::class, 'storeFile'])->name('files.store');
     Route::post('/folders', [FileExplorerController::class, 'storeFolder'])->name('folders.store');
     Route::get('/files/{file}/download', [FileExplorerController::class, 'download'])->name('files.download.{file}');
+    // File management routes
+    Route::get('/files', [FileExplorerController::class, 'index'])->name('explorer.index');
+    Route::post('/files', [FileExplorerController::class, 'storeFile'])->name('files.store');
+    Route::get('/files/{file}/download', [FileExplorerController::class, 'download'])->name('files.download');
+    Route::delete('/files/{file}', [FileExplorerController::class, 'destroyFile'])->name('files.destroy');
+    
+    // Folder management routes
+    Route::post('/folders', [FileExplorerController::class, 'storeFolder'])->name('folders.store');
+    Route::delete('/folders/{folder}', [FileExplorerController::class, 'destroyFolder'])->name('folders.destroy');
+    
+    // Share management routes
+    Route::get('/files/{file}/share', [FileExplorerController::class, 'getShareStatus'])->name('files.share');
+    Route::post('/files/{file}/share', [FileExplorerController::class, 'shareFile'])->name('files.share.create');
+    Route::put('/files/{file}/share', [FileExplorerController::class, 'updateShare'])->name('files.share.update');
     Route::delete('/files/{file}', [FileExplorerController::class, 'destroyFile'])->name('files.destroy.{file}');
     Route::delete('/folders/{folder}', [FileExplorerController::class, 'destroyFolder'])->name('folders.destroy.{folder}');
+    
+    Route::get('/files/sync', [FileSyncController::class, 'sync'])->name('explorer.files.sync');
+    Route::get('/folders/sync', [FolderSyncController::class, 'sync'])->name('explorer.folders.sync');
 });
+
+// Public file sharing routes (no auth required)
+Route::get('/share/{token}', [FileExplorerController::class, 'showSharedFile'])->name('share.show');
+Route::get('/share/{token}/download', [FileExplorerController::class, 'downloadSharedFile'])->name('share.download');
+Route::get('/share/{token}/preview', [FileExplorerController::class, 'getSharedFilePreviewUrl'])->name('share.preview');
 
 require __DIR__.'/auth.php';

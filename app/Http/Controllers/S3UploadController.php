@@ -293,34 +293,4 @@ class S3UploadController extends Controller
         }
     }
 
-    /**
-     * Get details of an uploaded file
-     */
-    public function getFileDetails(Request $request)
-    {
-        try {
-            $request->validate([
-                'key' => 'required|string',
-            ]);
-
-            $result = $this->client->headObject([
-                'Bucket' => $this->bucket,
-                'Key' => $request->key,
-            ]);
-
-            return response()->json([
-                'contentType' => $result['ContentType'] ?? null,
-                'contentLength' => $result['ContentLength'] ?? null,
-                'lastModified' => $result['LastModified'] ?? null,
-                'url' => $this->client->getObjectUrl($this->bucket, $request->key)
-            ]);
-        } catch (Throwable $exception) {
-            Log::error('File details retrieval failed', [
-                'exception' => $exception->getMessage(),
-                'trace' => $exception->getTraceAsString()
-            ]);
-
-            return response()->json(['message' => $exception->getMessage()], 500);
-        }
-    }
 }

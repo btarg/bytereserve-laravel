@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\File;
 use App\Models\Folder;
+use App\Models\FileShare;
 use App\Traits\S3Capable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -34,6 +35,7 @@ class FileExplorerController extends Controller
             $currentFolderId = null;
             $files = File::where('user_id', $user->id)
                 ->where('folder_id', null)
+                ->valid() // Only include non-expired files
                 ->get()
                 ->map(function ($file) {
                     $file->type = 'file'; // Explicitly mark as file
@@ -62,6 +64,7 @@ class FileExplorerController extends Controller
 
             $currentFolderId = $currentFolder->id;
             $files = File::where('folder_id', $currentFolder->id)
+                ->valid() // Only include non-expired files
                 ->get()
                 ->map(function ($file) {
                     $file->type = 'file'; // Explicitly mark as file
@@ -97,6 +100,8 @@ class FileExplorerController extends Controller
                 'mime_type' => 'required|string|max:255',
                 'size' => 'required|integer',
                 'folder_id' => 'nullable|exists:folders,id',
+                'hash' => 'required|string|max:64',
+                'expires_at' => 'nullable|date|after:now',
             ]);
 
             // Debug log what we received
@@ -109,7 +114,8 @@ class FileExplorerController extends Controller
             $file->path = $validated['path']; // This is the S3 key
             $file->mime_type = $validated['mime_type'];
             $file->size = $validated['size'];
-
+            $file->hash = $validated['hash'];
+            $file->expires_at = $validated['expires_at'] ?? null;
             $file->save();
 
             // Update the folder size if this file is in a folder
@@ -215,18 +221,15 @@ class FileExplorerController extends Controller
                 return response()->json(['error' => 'Unauthorized'], 403);
             }
 
-            // Cache the download URL for this file
-            $cacheKey = "file_download_{$file->id}";
+            // Always generate a fresh presigned URL (no caching)
+            // This ensures we never serve expired URLs
+            $cacheMinutes = (int)env('PRESIGNED_URL_CACHE_MINUTES', 15);
+            $downloadUrl = $file->getPresignedUrl($cacheMinutes);
 
-            return Cache::remember($cacheKey, now()->addMinutes(5), function () use ($file) {
-                // Generate a presigned URL for the file
-                $downloadUrl = $file->getPresignedUrl(15); // 15 minutes expiry
-
-                return response()->json([
-                    'download_url' => $downloadUrl,
-                    'name' => $file->name
-                ]);
-            });
+            return response()->json([
+                'download_url' => $downloadUrl,
+                'name' => $file->name
+            ]);
         } catch (\Exception $e) {
             Log::error('File download failed', [
                 'error' => $e->getMessage(),
@@ -273,7 +276,6 @@ class FileExplorerController extends Controller
             if ($folderId) {
                 $this->invalidateFolderCache($folderId);
             }
-            Cache::forget("file_download_{$file->id}");
 
             // Delete from S3
             $s3Client = $this->getS3Client();
@@ -332,10 +334,6 @@ class FileExplorerController extends Controller
                 $this->invalidateFolderCache($folderId);
             }
 
-            foreach ($fileIds as $fileId) {
-                Cache::forget("file_download_{$fileId}");
-            }
-
             $this->invalidateExplorerCache('/');
             if ($parentId) {
                 $this->invalidateFolderCache($parentId);
@@ -351,6 +349,257 @@ class FileExplorerController extends Controller
             ]);
 
             return response()->json(['error' => 'Failed to delete folder'], 500);
+        }
+    }
+
+    /**
+     * Get or create a share link for a file
+     */
+    public function shareFile(Request $request, File $file)
+    {
+        try {
+            // Check if user has access to this file
+            if ($file->user_id !== Auth::id()) {
+                return response()->json(['error' => 'Unauthorized'], 403);
+            }
+
+            // Check if a share already exists for this file
+            $existingShare = FileShare::where('file_id', $file->id)
+                ->where('user_id', Auth::id())
+                ->first();
+
+            if ($existingShare) {
+                // Return existing share
+                return response()->json([
+                    'share_token' => $existingShare->token,
+                    'share_url' => route('share.show', $existingShare->token),
+                    'file_name' => $file->name,
+                    'is_active' => $existingShare->is_active,
+                    'expires_at' => $existingShare->expires_at?->toISOString(),
+                    'max_downloads' => $existingShare->max_downloads,
+                    'download_count' => $existingShare->download_count
+                ]);
+            }
+
+            // Create new share (disabled by default)
+            $share = FileShare::create([
+                'file_id' => $file->id,
+                'user_id' => Auth::id(),
+                'token' => FileShare::generateToken(),
+                'is_active' => false, // Disabled by default
+            ]);
+
+            return response()->json([
+                'share_token' => $share->token,
+                'share_url' => route('share.show', $share->token),
+                'file_name' => $file->name,
+                'is_active' => $share->is_active,
+                'expires_at' => $share->expires_at?->toISOString(),
+                'max_downloads' => $share->max_downloads,
+                'download_count' => $share->download_count
+            ]);
+        } catch (\Exception $e) {
+            Log::error('File share creation failed', [
+                'error' => $e->getMessage(),
+                'file_id' => $file->id,
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json(['error' => 'Failed to create share link'], 500);
+        }
+    }
+
+    /**
+     * Update share settings
+     */
+    public function updateShare(Request $request, File $file)
+    {
+        try {
+            // Check if user has access to this file
+            if ($file->user_id !== Auth::id()) {
+                return response()->json(['error' => 'Unauthorized'], 403);
+            }
+
+            // Validate request
+            $validated = $request->validate([
+                'is_active' => 'required|boolean',
+                'expires_at' => 'nullable|date|after:now',
+                'max_downloads' => 'nullable|integer|min:1'
+            ]);
+
+            // Find existing share
+            $share = FileShare::where('file_id', $file->id)
+                ->where('user_id', Auth::id())
+                ->first();
+
+            if (!$share) {
+                return response()->json(['error' => 'Share not found'], 404);
+            }
+
+            // Update share settings
+            $share->is_active = $validated['is_active'];
+            
+            if (isset($validated['expires_at'])) {
+                $share->expires_at = $validated['expires_at'];
+            }
+            
+            if (isset($validated['max_downloads'])) {
+                $share->max_downloads = $validated['max_downloads'];
+            }
+
+            $share->save();
+
+            return response()->json([
+                'share_token' => $share->token,
+                'share_url' => route('share.show', $share->token),
+                'file_name' => $file->name,
+                'is_active' => $share->is_active,
+                'expires_at' => $share->expires_at?->toISOString(),
+                'max_downloads' => $share->max_downloads,
+                'download_count' => $share->download_count
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Share update failed', [
+                'error' => $e->getMessage(),
+                'file_id' => $file->id,
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json(['error' => 'Failed to update share'], 500);
+        }
+    }
+
+    /**
+     * Show the shared file download page
+     */
+    public function showSharedFile($token)
+    {
+        $share = FileShare::where('token', $token)->with('file')->first();
+        
+        if (!$share || !$share->isValid()) {
+            return response()->view('errors.404', [], 404);
+        }
+
+        return inertia('SharedFile', [
+            'share_token' => $token,
+            'file_name' => $share->file->name,
+            'file_size' => $share->file->size,
+            'mime_type' => $share->file->mime_type
+        ]);
+    }
+
+    /**
+     * Download a shared file
+     */
+    public function downloadSharedFile($token)
+    {
+        try {
+            $share = FileShare::where('token', $token)->with('file')->first();
+            
+            if (!$share || !$share->isValid()) {
+                return response()->json(['error' => 'Share link not found or expired'], 404);
+            }
+
+            $file = $share->file;
+            
+            // Generate presigned URL
+            $cacheMinutes = (int)env('PRESIGNED_URL_CACHE_MINUTES', 15);
+            $downloadUrl = $file->getPresignedUrl($cacheMinutes);
+
+            // Increment download count
+            $share->incrementDownloadCount();
+
+            return response()->json([
+                'download_url' => $downloadUrl,
+                'name' => $file->name
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Shared file download failed', [
+                'error' => $e->getMessage(),
+                'token' => $token,
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json(['error' => 'Failed to generate download URL'], 500);
+        }
+    }
+
+    /**
+     * Get preview URL for a shared file
+     */
+    public function getSharedFilePreviewUrl($token)
+    {
+        try {
+            $share = FileShare::where('token', $token)->with('file')->first();
+            
+            if (!$share || !$share->isValid()) {
+                return response()->json(['error' => 'Share link not found or expired'], 404);
+            }
+
+            $file = $share->file;
+            
+            // Generate presigned URL for preview (inline display)
+            $cacheMinutes = (int)env('PRESIGNED_URL_CACHE_MINUTES', 15);
+            $previewUrl = $file->getPreviewUrl($cacheMinutes);
+
+            return response()->json([
+                'preview_url' => $previewUrl,
+                'name' => $file->name
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Shared file preview URL failed', [
+                'error' => $e->getMessage(),
+                'token' => $token,
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json(['error' => 'Failed to generate preview URL'], 500);
+        }
+    }
+
+    /**
+     * Get share status for a file
+     */
+    public function getShareStatus(File $file)
+    {
+        try {
+            // Check if user has access to this file
+            if ($file->user_id !== Auth::id()) {
+                return response()->json(['error' => 'Unauthorized'], 403);
+            }
+
+            // Find existing share for this file
+            $share = FileShare::where('file_id', $file->id)
+                ->where('user_id', Auth::id())
+                ->first();
+
+            if (!$share) {
+                // No share exists, return default state
+                return response()->json([
+                    'exists' => false,
+                    'is_active' => false,
+                    'download_count' => 0,
+                    'max_downloads' => null,
+                    'token' => null
+                ]);
+            }
+
+            return response()->json([
+                'exists' => true,
+                'is_active' => $share->is_active,
+                'download_count' => $share->download_count,
+                'max_downloads' => $share->max_downloads,
+                'token' => $share->token,
+                'expires_at' => $share->expires_at?->toISOString()
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Failed to get share status', [
+                'error' => $e->getMessage(),
+                'file_id' => $file->id,
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json(['error' => 'Failed to get share status'], 500);
         }
     }
 

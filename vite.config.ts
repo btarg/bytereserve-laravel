@@ -50,7 +50,20 @@ function workerDevPlugin() {
     };
 }
 
+const codespacesDomain = process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN
+const codespaceName = process.env.CODESPACE_NAME;
+
 export default defineConfig({
+    server: {
+        // Allow connections from any IP
+        host: codespaceName ? '0.0.0.0' : 'localhost',
+        // Correctly handle HMR in Codespaces
+        hmr: codespacesDomain ? {
+            host: `${codespaceName}-5173.${codespacesDomain}`,
+            protocol: 'wss',
+            clientPort: 443
+        } : true,
+    },
     plugins: [
         laravel({
             input: ['resources/js/app.ts'],
@@ -63,7 +76,9 @@ export default defineConfig({
                     includeAbsolute: false,
                 },
             },
-        })
+        }),
+        // @ts-expect-error
+        workerDevPlugin(),
     ],
     build: {
         manifest: true,
@@ -86,6 +101,7 @@ export default defineConfig({
     resolve: {
         alias: {
             '@': '/resources/js',
+            'ziggy-js': '/vendor/tightenco/ziggy/dist',
         },
     },
 });

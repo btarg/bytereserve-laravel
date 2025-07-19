@@ -1,65 +1,103 @@
-﻿<!-- filepath: /c:/Users/BenTa/Documents/Laravel/chirper/resources/js/Components/Files/FileList.vue -->
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, defineProps, defineEmits } from 'vue';
-import { FileItem } from '../../types';
+import { UIFileEntry } from '../../types';
+import { getItemsByPath, Files, Folders } from '@/util/database/ModelRegistry';
+
+
 import {
     FolderIcon,
-    DocumentIcon,
     CheckCircleIcon,
-    ArrowDownTrayIcon
+    ArrowDownTrayIcon,
+    TrashIcon
 } from '@heroicons/vue/24/outline';
 
-import { S3UploadService } from "@/util/S3UploadService";
+import { S3UploadService } from "@/util/uploads/S3UploadService";
+import { S3DownloadService } from "@/util/downloads/S3DownloadService";
+import EncryptionKeyModal from "./EncryptionKeyModal.vue";
+import ShareModal from "./ShareModal.vue";
+import FileTypeIcon from "./FileTypeIcon.vue";
+import UploadConfigModal from "./UploadConfigModal.vue";
+import FileShareBadge from "./FileShareBadge.vue";
 import { useToast } from "vue-toastification";
-import { route } from '../../../../vendor/tightenco/ziggy/src/js';
+import { route } from 'ziggy-js';
 import { formatFileSize } from '@/util/FormattingUtils';
-
 const toast = useToast();
 const props = defineProps<{
     currentPath: string;
 }>();
 
 const emit = defineEmits<{
-    (e: 'selection-change', items: FileItem[]): void;
+    (e: 'selection-change', items: UIFileEntry[]): void;
     (e: 'path-change', path: string): void;
 }>();
 
 const isDragging = ref(false);
 const isLoading = ref(false);
-const selectedItems = ref<FileItem[]>([]);
-const files = ref<FileItem[]>([]);
+const selectedItems = ref<UIFileEntry[]>([]);
+const uiFileEntries = ref<UIFileEntry[]>([]);
 const currentFolderId = ref<number | null>(null);
 const downloading = ref<Record<number, boolean>>({});
 
 const uploadService = new S3UploadService();
+const downloadService = new S3DownloadService();
 const uploadProgress = ref<Record<string, number>>({});
 const uploadsInProgress = ref<number>(0);
 
-const refreshFiles = async () => {
-    console.log("Refreshing files");
+// Download progress and encryption key management
+const downloadProgress = ref<Record<number, { progress: number; fileName: string }>>({});
+const downloadQueue = ref<Array<{ id: number; fileName: string; status: 'pending' | 'downloading' | 'completed' | 'failed' }>>([]);
+
+// Upload progress management
+const uploadQueue = ref<Array<{ id: string; fileName: string; status: 'pending' | 'uploading' | 'completed' | 'failed'; progress: number }>>([]);
+const showUploadModal = ref(false);
+
+const showEncryptionKeyModal = ref(false);
+const encryptionKey = ref('');
+const pendingDownload = ref<UIFileEntry | null>(null);
+const isFileEncrypted = ref(false);
+
+// Share modal state
+const showShareModal = ref(false);
+const shareItem = ref<UIFileEntry | null>(null);
+
+// Drag and drop upload modal state
+const showDragUploadModal = ref(false);
+const pendingDragFiles = ref<FileList | null>(null);
+const dragEncryptionKey = ref('');
+
+const refreshFiles = async (forceSync = false) => {
+    console.log("Refreshing files, forceSync:", forceSync);
     selectedItems.value = [];
     emit('selection-change', []);
+
+    await fetchItems(forceSync);
+};
+
+const handleUploadFiles = async (files: FileList, config: any) => {
+    console.log("Processing uploaded files with config:", config);
     
+    const filesToProcess = Array.from(files);
+    uploadsInProgress.value = filesToProcess.length;
+
     try {
-        // Clear all explorer caches to ensure we get fresh data
-        await window.cacheFetch.clearCaches();
-        console.log('Explorer caches cleared');
-        
-        // Then fetch with network-only to ensure fresh data
-        await fetchItems();
-    } catch (error) {
-        console.error('Error refreshing files:', error);
-        toast.error("Failed to refresh files");
+        // Process files in batches with the configuration
+        const batchSize = 5;
+        for (let i = 0; i < filesToProcess.length; i += batchSize) {
+            const batch = filesToProcess.slice(i, i + batchSize);
+            await Promise.all(batch.map((file) => processFileWithConfig(file, config)));
+        }
+    } finally {
+        await refreshFiles();
     }
 };
 
 defineExpose({
-    refreshFiles
+    refreshFiles,
+    handleUploadFiles
 });
 
-const handleItemClick = async (item: FileItem) => {
+const handleItemClick = async (item: UIFileEntry) => {
     if (item.type === 'folder') {
-        // Navigate to the folder
         navigateToFolder(item.path);
     } else {
         await downloadFile(item);
@@ -70,14 +108,14 @@ const handleItemClick = async (item: FileItem) => {
 const navigateToFolder = (folderPath: string) => {
     // Emit event to update the current path in parent components
     emit('path-change', folderPath);
-    
+
     // Update browser history
     const url = new URL(window.location.href);
     url.searchParams.set('folder', folderPath);
     history.pushState({}, '', url);
 };
 
-const downloadFile = async (item: FileItem) => {
+const downloadFile = async (item: UIFileEntry) => {
     if (!item.id) {
         toast.error("Cannot download file: Missing file ID");
         return;
@@ -86,51 +124,336 @@ const downloadFile = async (item: FileItem) => {
     try {
         downloading.value[item.id] = true;
 
-        const response = await window.cacheFetch.get(route('files.download.{file}', { file: item.id }));
-        const data = await response.json();
-        console.log(data);
+        // Add to download queue
+        downloadQueue.value.push({
+            id: item.id as number,
+            fileName: item.name,
+            status: 'pending'
+        });
 
+        // Get download URL to check if file is encrypted
+        const response = await fetch(
+            route('files.download.{file}', { file: item.id }),
+            {
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-XSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || ''
+                }
+            }
+        );
 
-        if (data.download_url) {
-            // Create a temporary link and click it
-            const link = document.createElement('a');
-            link.href = data.download_url;
-            link.setAttribute('download', item.name);
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            toast.success(`Downloading ${item.name}`);
-        } else {
-            toast.error("Download URL not found");
+        if (!response.ok) {
+            throw new Error(`Failed to get download URL: ${response.statusText}`);
         }
+
+        const data = await response.json();
+        
+        if (!data.download_url) {
+            throw new Error('No download URL provided');
+        }
+
+        // Check if file is encrypted by downloading a small sample
+        const isEncrypted = await checkIfFileIsEncrypted(data.download_url);
+        
+        if (isEncrypted) {
+            // Show encryption key modal
+            pendingDownload.value = item;
+            isFileEncrypted.value = true;
+            showEncryptionKeyModal.value = true;
+            
+            // Remove from queue temporarily
+            const queueIndex = downloadQueue.value.findIndex(q => q.id === item.id);
+            if (queueIndex !== -1) {
+                downloadQueue.value.splice(queueIndex, 1);
+            }
+            
+            downloading.value[item.id] = false;
+            return;
+        }
+
+        // File is not encrypted, proceed with download
+        await performDownload(item, "");
+        
     } catch (error) {
         console.error('Error downloading file:', error);
-        toast.error(`Error downloading file: ${error.response?.data?.error || 'Unknown error'}`);
+        toast.error(`Error downloading file: ${error.message || 'Unknown error'}`);
+        
+        // Update queue status
+        const queueItem = downloadQueue.value.find(q => q.id === item.id);
+        if (queueItem) {
+            queueItem.status = 'failed';
+        }
+        
+        downloading.value[item.id] = false;
+    }
+};
+
+const checkIfFileIsEncrypted = async (downloadUrl: string): Promise<boolean> => {
+    try {
+        // Download just the first few bytes to check for salt
+        const response = await fetch(downloadUrl, {
+            headers: {
+                'Range': 'bytes=0-31' // Get first 32 bytes
+            }
+        });
+        
+        if (!response.ok) {
+            return false; // Assume not encrypted if we can't check
+        }
+        
+        const buffer = await response.arrayBuffer();
+        const dataView = new Uint8Array(buffer);
+        
+        // Check if file has the minimum size for encryption (salt + iv + auth tag)
+        if (dataView.length >= 16) {
+            // This is a simple heuristic - in a real app you might want to store encryption metadata
+            return true; // Assume encrypted if file is large enough
+        }
+        
+        return false;
+    } catch (error) {
+        console.error('Error checking encryption status:', error);
+        return false; // Default to not encrypted
+    }
+};
+
+const performDownload = async (item: UIFileEntry, password: string) => {
+    try {
+        downloading.value[item.id] = true;
+        
+        // Update queue status
+        const queueItem = downloadQueue.value.find(q => q.id === item.id);
+        if (queueItem) {
+            queueItem.status = 'downloading';
+        }
+
+        // Use the download service to handle encrypted downloads
+        const decryptedBlob = await downloadService.downloadFile(
+            item.id as number,
+            item.name,
+            password || "password", // Use provided password or default
+            (progress) => {
+                downloadProgress.value[item.id] = {
+                    progress: progress.percentage,
+                    fileName: item.name
+                };
+                console.log(`Download progress: ${progress.percentage.toFixed(1)}%`);
+            }
+        );
+
+        // Create a more reliable download completion tracking using focus events
+        let downloadProcessed = false;
+        let timeoutId: number;
+        
+        const cleanupDownload = (wasSuccessful: boolean) => {
+            if (downloadProcessed) return;
+            downloadProcessed = true;
+            
+            clearTimeout(timeoutId);
+            
+            if (wasSuccessful) {
+                toast.success(`Downloaded ${item.name}`);
+                
+                // Update queue status
+                if (queueItem) {
+                    queueItem.status = 'completed';
+                }
+                
+                // Clean up after delay
+                setTimeout(() => {
+                    delete downloadProgress.value[item.id];
+                    const index = downloadQueue.value.findIndex(q => q.id === item.id);
+                    if (index !== -1) {
+                        downloadQueue.value.splice(index, 1);
+                    }
+                }, 2000);
+            } else {
+                // Download was cancelled
+                toast.info(`Download cancelled for ${item.name}`);
+                
+                // Remove from queue immediately
+                const index = downloadQueue.value.findIndex(q => q.id === item.id);
+                if (index !== -1) {
+                    downloadQueue.value.splice(index, 1);
+                }
+                
+                delete downloadProgress.value[item.id];
+            }
+            
+            // Cleanup event listeners
+            window.removeEventListener('focus', handleWindowFocus);
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+        };
+        
+        // Listen for window focus events (user comes back after save dialog)
+        const handleWindowFocus = () => {
+            // Short delay to let the save dialog finish
+            setTimeout(() => {
+                cleanupDownload(true);
+            }, 100);
+        };
+        
+        // Fallback: visibility change detection
+        const handleVisibilityChange = () => {
+            if (!document.hidden) {
+                setTimeout(() => {
+                    cleanupDownload(true);
+                }, 100);
+            }
+        };
+        
+        window.addEventListener('focus', handleWindowFocus, { once: true });
+        document.addEventListener('visibilitychange', handleVisibilityChange, { once: true });
+        
+        // Trigger the download
+        S3DownloadService.triggerDownload(decryptedBlob, item.name);
+        
+        // Shorter timeout to detect cancelled downloads faster
+        timeoutId = setTimeout(() => {
+            cleanupDownload(false);
+        }, 1500); // Reduced from 3000ms to 1500ms
+
+    } catch (error) {
+        console.error('Error downloading file:', error);
+        toast.error(`Error downloading file: ${error.message || 'Unknown error'}`);
+        
+        // Update queue status
+        const queueItem = downloadQueue.value.find(q => q.id === item.id);
+        if (queueItem) {
+            queueItem.status = 'failed';
+        }
     } finally {
         downloading.value[item.id] = false;
     }
 };
 
-// Fetch files and folders for the current path
-const fetchItems = async () => {
+const handleEncryptionKeySubmit = async (key: string) => {
+    if (!pendingDownload.value) return;
+    
+    // Add back to download queue
+    downloadQueue.value.push({
+        id: pendingDownload.value.id as number,
+        fileName: pendingDownload.value.name,
+        status: 'pending'
+    });
+    
+    // Close modal
+    showEncryptionKeyModal.value = false;
+    
+    // Perform download with provided key
+    await performDownload(pendingDownload.value, key);
+    
+    // Reset modal state
+    pendingDownload.value = null;
+    encryptionKey.value = '';
+    isFileEncrypted.value = false;
+};
+
+const cancelEncryptionKeyModal = () => {
+    showEncryptionKeyModal.value = false;
+    encryptionKey.value = '';
+    pendingDownload.value = null;
+    isFileEncrypted.value = false;
+};
+
+const openShareModal = (item: UIFileEntry) => {
+    shareItem.value = item;
+    showShareModal.value = true;
+};
+
+const closeShareModal = () => {
+    showShareModal.value = false;
+    shareItem.value = null;
+};
+
+const deleteFile = async (item: UIFileEntry) => {
+    if (!confirm(`Are you sure you want to delete "${item.name}"?`)) {
+        return;
+    }
+
+    try {
+        if (item.type === 'file') {
+            // Delete from the server
+            await window.cacheFetch.delete(route('files.destroy.{file}', { file: item.id }));
+
+            // Also delete from IndexedDB
+            try {
+                await Files().delete(item.id);
+                console.log(`File ${item.id} deleted from IndexedDB`);
+            } catch (dbError) {
+                console.warn(`Could not delete file ${item.id} from IndexedDB:`, dbError);
+            }
+        } else {
+            // Delete from the server
+            await window.cacheFetch.delete(route('folders.destroy.{folder}', { folder: item.id }));
+
+            // Also delete from IndexedDB
+            try {
+                await Folders().delete(item.id);
+                console.log(`Folder ${item.id} deleted from IndexedDB`);
+            } catch (dbError) {
+                console.warn(`Could not delete folder ${item.id} from IndexedDB:`, dbError);
+            }
+        }
+
+        // Refresh the file list
+        await refreshFiles();
+        
+        toast.success(`${item.name} deleted successfully`);
+    } catch (error) {
+        console.error('Failed to delete item:', error);
+        toast.error(`Failed to delete ${item.name}`);
+    }
+};
+
+const fetchItems = async (forceSync = false) => {
     isLoading.value = true;
     try {
-        const response = await window.cacheFetch.get(
-            // Convert the route to a URL with query parameters
-            route('explorer.index') + '?' + new URLSearchParams({
-                path: props.currentPath
-            }).toString(),
-        );
+        // Ensure database is initialized before fetching
+        if (window.dbInitPromise) {
+            try {
+                await window.dbInitPromise;
+            } catch (initError) {
+                console.error('Database initialization error:', initError);
+                // Continue to network fallback
+            }
+        }
 
-        const data = await response.json();
+        let data;
 
+        // First try to get data from IndexedDB
+        try {
+            data = await getItemsByPath(props.currentPath, forceSync);
+            console.log('Loaded files from IndexedDB');
+        } catch (offlineError) {
+            console.warn('Failed to get items from IndexedDB:', offlineError);
 
-        files.value = data.items.map(item => {
+            // Fall back to the network if IndexedDB fails
+            try {
+                const response = await window.cacheFetch.get(
+                    route('explorer.index') + '?' + new URLSearchParams({
+                        path: props.currentPath
+                    }).toString(),
+                );
+                data = await response.json();
+                console.log('Loaded files from network');
+            } catch (networkError) {
+                console.error('Failed to load files from network:', networkError);
+
+                // If both IndexedDB and network fail, provide an empty data structure
+                data = { items: [], current_folder_id: null };
+                toast.error("Failed to load files. Working in offline mode with limited data.");
+            }
+        }
+
+        // Map the items to our expected format
+        uiFileEntries.value = data.items.map(item => {
             // For folders, create the correct path
             let itemPath = '';
+
             if (item.type === 'folder') {
-                // Construct proper folder path
-                itemPath = `${props.currentPath === '/' ? '' : props.currentPath}/${item.name}`;
+                // Use the path from the database if available, otherwise construct it
+                itemPath = item.path || `${props.currentPath === '/' ? '' : props.currentPath}/${item.name}`;
             } else {
                 // For files, use the path from the database (S3 key)
                 itemPath = item.path || '';
@@ -139,7 +462,7 @@ const fetchItems = async () => {
             return {
                 id: item.id,
                 name: item.name,
-                type: item.type, // Use the explicitly set type from backend
+                type: item.type,
                 size: item.size || 0,
                 modified_at: new Date(item.updated_at || item.created_at),
                 path: itemPath,
@@ -154,13 +477,15 @@ const fetchItems = async () => {
     } catch (error) {
         console.error('Error fetching files:', error);
         toast.error("Failed to load files. Please try again.");
+        uiFileEntries.value = []; // Reset files on error
     } finally {
         isLoading.value = false;
     }
 };
 
+
 // Selection handling
-const toggleSelection = (item: FileItem) => {
+const toggleSelection = (item: UIFileEntry) => {
     const index = selectedItems.value.findIndex(i => i.id === item.id);
     if (index === -1) {
         selectedItems.value.push(item);
@@ -170,7 +495,7 @@ const toggleSelection = (item: FileItem) => {
     emit('selection-change', selectedItems.value);
 };
 
-const isSelected = (item: FileItem): boolean => {
+const isSelected = (item: UIFileEntry): boolean => {
     return selectedItems.value.some(i => i.id === item.id);
 };
 
@@ -207,32 +532,118 @@ const handleDragLeave = (event: DragEvent) => {
 
 
 async function processFile(file: File) {
+    return processFileWithConfig(file, {
+        useEncryption: true,
+        encryptionKey: 'password',
+        useExpiry: false,
+        expiryTime: null
+    });
+}
+
+async function processFileWithConfig(file: File, config: any) {
     try {
         // Initialize progress tracking
         const fileId = `${file.name}-${file.size}-${Date.now()}`;
         uploadProgress.value[fileId] = 0;
-        
+
+        // Add to upload queue
+        uploadQueue.value.push({
+            id: fileId,
+            fileName: file.name,
+            status: 'pending',
+            progress: 0
+        });
+
+        // Show upload modal if not already visible
+        if (uploadQueue.value.length === 1) {
+            showUploadModal.value = true;
+        }
+
+        // Update queue status
+        const queueItem = uploadQueue.value.find(q => q.id === fileId);
+        if (queueItem) {
+            queueItem.status = 'uploading';
+        }
+
         // Start timing the upload
         const startTime = performance.now();
-        
-        const result = await uploadService.uploadFile(file, "password", currentFolderId.value, (progress) => {
-            uploadProgress.value[fileId] = progress;
-        });
-        
+
+        // Determine encryption settings
+        const encryptionKey = config.useEncryption ? config.encryptionKey : '';
+        const shouldEncrypt = config.useEncryption && encryptionKey.length > 0;
+
+        // Parse expiry time if provided
+        const expiryTime = config.useExpiry && config.expiryTime ? 
+            (config.expiryTime instanceof Date ? config.expiryTime : new Date(config.expiryTime)) : null;
+
+        // Try to upload to S3
+        let result = null;
+        try {
+            result = await uploadService.uploadFile(
+                file, 
+                encryptionKey || "password", // Use provided key or default
+                currentFolderId.value, 
+                (progress) => {
+                    uploadProgress.value[fileId] = progress;
+                    if (queueItem) {
+                        queueItem.progress = progress;
+                    }
+                },
+                shouldEncrypt,
+                expiryTime // Pass expiry time as Date object
+            );
+        } catch (uploadError) {
+            console.error('Upload failed:', uploadError);
+            // Will handle this case below
+        }
+
         // Calculate upload duration
         const endTime = performance.now();
         const duration = (endTime - startTime) / 1000; // Convert to seconds
-        
+
         uploadsInProgress.value--;
-        console.log(`Upload completed: ${result.name} (${formatFileSize(file.size)}) in ${duration.toFixed(2)}s`);
-        toast.success(`Uploaded ${file.name} in ${duration.toFixed(2)}s`);
-        
-        // Don't call refreshFiles() inside the loop - we'll refresh once at the end
+
+        if (result) {
+            const encryptionStatus = shouldEncrypt ? ' (encrypted)' : '';
+            toast.success(`Uploaded ${file.name}${encryptionStatus} in ${duration.toFixed(2)}s`);
+            if (queueItem) {
+                queueItem.status = 'completed';
+                queueItem.progress = 100;
+            }
+        } else {
+            toast.info(`${file.name} saved locally and will upload when connection is available`);
+            if (queueItem) {
+                queueItem.status = 'failed';
+            }
+        }
+
+        // Remove completed/failed items after delay
+        setTimeout(() => {
+            const index = uploadQueue.value.findIndex(q => q.id === fileId);
+            if (index !== -1) {
+                uploadQueue.value.splice(index, 1);
+            }
+            delete uploadProgress.value[fileId];
+            
+            // Hide modal if no more uploads
+            if (uploadQueue.value.length === 0) {
+                showUploadModal.value = false;
+            }
+        }, 3000);
+
         return result;
     } catch (error) {
         uploadsInProgress.value--;
-        console.error('File upload failed:', error);
-        toast.error(`Failed to upload ${file.name}`);
+        console.error('File processing failed:', error);
+        toast.error(`Failed to process ${file.name}`);
+        
+        // Update queue status
+        const fileId = `${file.name}-${file.size}-${Date.now()}`;
+        const queueItem = uploadQueue.value.find(q => q.id === fileId);
+        if (queueItem) {
+            queueItem.status = 'failed';
+        }
+        
         return null;
     }
 }
@@ -245,23 +656,45 @@ const handleDrop = async (event: DragEvent) => {
     const droppedFiles = event.dataTransfer?.files;
     if (!droppedFiles?.length) return;
 
-    uploadsInProgress.value = droppedFiles.length;
+    // Store the dropped files and show the upload configuration modal
+    pendingDragFiles.value = droppedFiles;
+    showDragUploadModal.value = true;
+};
 
-    // Process files concurrently but limit the number
-    const filesToProcess = Array.from(droppedFiles);
-    const batchSize = 5;
-    
+const handleDragUploadSubmit = async (config: { useEncryption: boolean; encryptionKey: string; useExpiry: boolean; expiryTime: Date | null }) => {
+    if (!pendingDragFiles.value) return;
+
+    const files = Array.from(pendingDragFiles.value);
+    uploadsInProgress.value = files.length;
+
+    // Close the modal immediately after starting upload
+    showDragUploadModal.value = false;
+    const filesToProcess = pendingDragFiles.value;
+    pendingDragFiles.value = null;
+
     try {
-        // Process files in batches
-        for (let i = 0; i < filesToProcess.length; i += batchSize) {
-            const batch = filesToProcess.slice(i, i + batchSize);
-            await Promise.all(batch.map(file => processFile(file)));
+        // Process files concurrently but limit the number
+        const batchSize = 5;
+        
+        for (let i = 0; i < files.length; i += batchSize) {
+            const batch = files.slice(i, i + batchSize);
+            await Promise.all(batch.map((file) => processFileWithConfig(file, {
+                useEncryption: config.useEncryption,
+                encryptionKey: config.encryptionKey,
+                useExpiry: config.useExpiry,
+                expiryTime: config.expiryTime // Pass Date object directly
+            })));
         }
     } finally {
-        // IMPORTANT: Refresh files once after all uploads complete
         await refreshFiles();
     }
 };
+
+const handleDragUploadCancel = () => {
+    showDragUploadModal.value = false;
+    pendingDragFiles.value = null;
+};
+
 
 watch(() => props.currentPath, () => {
     selectedItems.value = [];
@@ -269,12 +702,22 @@ watch(() => props.currentPath, () => {
     fetchItems();
 });
 
-onMounted(() => {
+onMounted(async () => {
     document.addEventListener('dragover', handleDragOver);
     document.addEventListener('dragleave', handleDragLeave);
     document.addEventListener('drop', handleDrop);
     window.addEventListener('popstate', handlePopState);
-    fetchItems();
+
+    try {
+        // Wait for database to initialize before fetching
+        if (window.dbInitPromise) {
+            await window.dbInitPromise;
+        }
+    } catch (error) {
+        console.error('Error waiting for database initialization:', error);
+    }
+
+    refreshFiles(false);
 });
 
 onUnmounted(() => {
@@ -287,58 +730,281 @@ onUnmounted(() => {
 </script>
 
 <template>
-    <div class="flex-1 overflow-auto p-6" :class="{ 'border-2 border-dashed border-blue-400 bg-blue-50': isDragging }">
+    <div class="flex-1 overflow-auto p-6 bg-white dark:bg-gray-900 transition-colors duration-200" 
+         :class="{ 'border-2 border-dashed border-blue-400 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-500': isDragging }">
+        
+        <!-- Loading state -->
         <div v-if="isLoading" class="flex justify-center p-12">
-            <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-500"></div>
+            <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-500 dark:border-blue-400"></div>
         </div>
 
-        <div v-else class="grid grid-cols-1 gap-2">
-            <div class="grid grid-cols-12 gap-4 px-4 py-2 text-sm font-medium text-gray-500 bg-gray-50 rounded-lg">
-                <div class="col-span-6">Name</div>
-                <div class="col-span-3">Modified</div>
-                <div class="col-span-3">Size</div>
+        <!-- File list -->
+        <div v-else class="space-y-1">
+            <!-- Header -->
+            <div class="grid grid-cols-12 gap-4 px-4 py-3 text-sm font-medium text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+                <div class="col-span-5">Name</div>
+                <div class="col-span-2">Share</div>
+                <div class="col-span-2">Modified</div>
+                <div class="col-span-2">Size</div>
+                <div class="col-span-1">Actions</div>
             </div>
 
-            <div v-if="files.length === 0" class="py-12 text-center text-gray-500">
-                No files or folders in this location. Drop files to upload.
+            <!-- Empty state -->
+            <div v-if="uiFileEntries.length === 0" class="py-16 text-center">
+                <div class="text-gray-400 dark:text-gray-500 mb-4">
+                    <svg class="w-16 h-16 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                    </svg>
+                </div>
+                <p class="text-gray-500 dark:text-gray-400 text-lg font-medium">No files or folders here</p>
+                <p class="text-gray-400 dark:text-gray-500 text-sm mt-2">Drop files to upload or create a new folder</p>
             </div>
 
-            <div v-for="item in files" :key="item.id"
-                class="grid grid-cols-12 gap-4 px-4 py-3 rounded-lg hover:bg-gray-50 cursor-pointer"
-                :class="{ 'bg-blue-50': isSelected(item) }"
-                @click="toggleSelection(item)">
-                <div class="col-span-6 flex items-center space-x-3">
-                    <CheckCircleIcon class="w-5 h-5" :class="isSelected(item) ? 'text-blue-500' : 'text-gray-200'" />
-                    <div class="flex items-center" @click.stop="handleItemClick(item)">
-                        <FolderIcon v-if="item.type === 'folder'" class="w-5 h-5 text-yellow-500" />
-                        <DocumentIcon v-else class="w-5 h-5 text-blue-500" />
-                        <span class="truncate ml-3">{{ item.name }}</span>
+            <!-- File entries -->
+            <div v-for="entry in uiFileEntries" :key="entry.id"
+                class="grid grid-cols-12 gap-4 px-4 py-3 rounded-lg border border-transparent hover:border-gray-200 dark:hover:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer transition-all duration-200 group"
+                :class="{ 
+                    'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-700': isSelected(entry),
+                    'hover:shadow-sm': !isSelected(entry)
+                }" 
+                @click="toggleSelection(entry)">
+                
+                <!-- Name column -->
+                <div class="col-span-5 flex items-center space-x-3">
+                    <div class="flex-shrink-0">
+                        <div class="w-5 h-5 rounded-full border-2 transition-colors duration-200"
+                             :class="isSelected(entry) 
+                                ? 'border-blue-500 bg-blue-500 dark:border-blue-400 dark:bg-blue-400' 
+                                : 'border-gray-300 dark:border-gray-600 group-hover:border-gray-400 dark:group-hover:border-gray-500'">
+                            <svg v-if="isSelected(entry)" class="w-3 h-3 text-white dark:text-gray-900 m-0.5" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path>
+                            </svg>
+                        </div>
+                    </div>
+                    
+                    <div class="flex items-center flex-1 min-w-0" @click.stop="handleItemClick(entry)">
+                        <div class="flex-shrink-0 mr-3">
+                            <FolderIcon v-if="entry.type === 'folder'" class="w-6 h-6 text-yellow-500 dark:text-yellow-400" />
+                            <FileTypeIcon v-else :fileName="entry.name" :mimeType="entry.mime_type" size="w-6 h-6" />
+                        </div>
+                        <span class="truncate text-gray-900 dark:text-white font-medium">{{ entry.name }}</span>
                     </div>
                 </div>
-                <div class="col-span-3 flex items-center">
-                    {{ item.modified_at.toLocaleDateString() }}
+                
+                <!-- Share column -->
+                <div class="col-span-2 flex items-center">
+                    <FileShareBadge v-if="entry.type === 'file'" :fileId="entry.id!" />
+                    <span v-else class="text-gray-400 dark:text-gray-500 text-sm">—</span>
                 </div>
-                <div class="col-span-3 flex items-center">{{ formatFileSize(item.size) }}</div>
+                
+                <!-- Modified column -->
+                <div class="col-span-2 flex items-center">
+                    <span class="text-gray-600 dark:text-gray-400 text-sm">
+                        {{ entry.modified_at.toLocaleDateString() }}
+                    </span>
+                </div>
+                
+                <!-- Size column -->
+                <div class="col-span-2 flex items-center">
+                    <span class="text-gray-600 dark:text-gray-400 text-sm">
+                        {{ formatFileSize(entry.size) }}
+                    </span>
+                </div>
+                
+                <!-- Actions column -->
+                <div class="col-span-1 flex items-center justify-end">
+                    <div v-if="entry.type === 'file'" class="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200" @click.stop>
+                        <button
+                            @click="downloadFile(entry)"
+                            :disabled="downloading[entry.id!]"
+                            class="p-2 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
+                            title="Download"
+                        >
+                            <ArrowDownTrayIcon class="w-4 h-4" />
+                        </button>
+                        
+                        <button
+                            @click="openShareModal(entry)"
+                            class="p-2 text-gray-400 hover:text-green-600 dark:hover:text-green-400 transition-colors rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
+                            title="Share"
+                        >
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.367 2.684 3 3 0 00-5.367-2.684z" />
+                            </svg>
+                        </button>
+                        
+                        <button
+                            @click="deleteFile(entry)"
+                            class="p-2 text-gray-400 hover:text-red-600 dark:hover:text-red-400 transition-colors rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
+                            title="Delete"
+                        >
+                            <TrashIcon class="w-4 h-4" />
+                        </button>
+                    </div>
+                </div>
             </div>
+        </div>
 
-            <!-- Drop zone overlay -->
-            <div v-if="isDragging" class="absolute inset-0 bg-blue-100 bg-opacity-50 flex items-center justify-center">
-                <div class="text-xl font-semibold text-blue-600">
+        <!-- Drop zone overlay -->
+        <div v-if="isDragging" class="fixed inset-0 bg-blue-100 dark:bg-blue-900/50 bg-opacity-50 flex items-center justify-center z-50">
+            <div class="text-center">
+                <div class="text-6xl mb-4">📁</div>
+                <div class="text-2xl font-bold text-blue-600 dark:text-blue-400 mb-2">
                     Drop files here to upload
                 </div>
+                <div class="text-blue-500 dark:text-blue-300">
+                    Release to start uploading
+                </div>
             </div>
         </div>
 
-        <!-- Action buttons for selected items -->
-        <div v-if="selectedItems.length === 1" class="fixed bottom-5 right-5 bg-white shadow-lg rounded-lg p-2 flex">
-            <button v-if="selectedItems[0].type === 'file'" @click="downloadFile(selectedItems[0])"
-                class="p-2 text-blue-600 hover:bg-blue-50 rounded flex items-center gap-2"
-                :disabled="downloading[selectedItems[0].id]">
-                <span v-if="downloading[selectedItems[0].id]"
-                    class="animate-spin h-5 w-5 border-2 border-blue-500 rounded-full border-t-transparent"></span>
-                <ArrowDownTrayIcon v-else class="w-5 h-5" />
-                Download
-            </button>
+        <!-- Download Progress Panel -->
+        <div v-if="downloadQueue.length > 0 || Object.keys(downloadProgress).length > 0" 
+             class="fixed bottom-5 left-5 bg-white dark:bg-gray-800 shadow-lg rounded-lg p-4 w-80 max-h-64 overflow-y-auto border border-gray-200 dark:border-gray-700">
+            <div class="flex items-center justify-between mb-3">
+                <h3 class="text-sm font-semibold text-gray-800 dark:text-gray-200 flex items-center">
+                    <ArrowDownTrayIcon class="w-4 h-4 mr-2" />
+                    Downloads ({{ downloadQueue.length }})
+                </h3>
+                <button @click="downloadQueue = []; Object.keys(downloadProgress).forEach(key => delete downloadProgress[key])" 
+                        class="text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300">
+                    <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+                    </svg>
+                </button>
+            </div>
+            
+            <!-- Download Queue Items -->
+            <div v-for="queueItem in downloadQueue" :key="queueItem.id" class="mb-3 last:mb-0">
+                <div class="flex items-center justify-between mb-1">
+                    <span class="text-xs font-medium text-gray-700 truncate">{{ queueItem.fileName }}</span>
+                    <span class="text-xs px-2 py-1 rounded-full" 
+                          :class="{
+                              'bg-yellow-100 text-yellow-800': queueItem.status === 'pending',
+                              'bg-blue-100 text-blue-800': queueItem.status === 'downloading',
+                              'bg-green-100 text-green-800': queueItem.status === 'completed',
+                              'bg-red-100 text-red-800': queueItem.status === 'failed'
+                          }">
+                        {{ queueItem.status }}
+                    </span>
+                </div>
+                
+                <!-- Progress bar for downloading files -->
+                <div v-if="queueItem.status === 'downloading' && downloadProgress[queueItem.id]" 
+                     class="w-full bg-gray-200 rounded-full h-2">
+                    <div class="bg-blue-600 h-2 rounded-full transition-all duration-300" 
+                         :style="{ width: downloadProgress[queueItem.id].progress + '%' }">
+                    </div>
+                    <div class="text-xs text-gray-500 mt-1">
+                        {{ Math.round(downloadProgress[queueItem.id].progress) }}%
+                    </div>
+                </div>
+                
+                <!-- Simple progress indicator for pending -->
+                <div v-else-if="queueItem.status === 'pending'" class="w-full bg-gray-200 rounded-full h-2">
+                    <div class="bg-yellow-400 h-2 rounded-full w-0"></div>
+                </div>
+                
+                <!-- Completed indicator -->
+                <div v-else-if="queueItem.status === 'completed'" class="w-full bg-green-200 rounded-full h-2">
+                    <div class="bg-green-600 h-2 rounded-full w-full"></div>
+                </div>
+                
+                <!-- Failed indicator -->
+                <div v-else-if="queueItem.status === 'failed'" class="w-full bg-red-200 rounded-full h-2">
+                    <div class="bg-red-600 h-2 rounded-full w-full"></div>
+                </div>
+            </div>
         </div>
+
+        <!-- Upload Progress Panel -->
+        <div v-if="uploadQueue.length > 0" 
+             class="fixed bottom-20 right-5 bg-white dark:bg-gray-800 shadow-lg rounded-lg p-4 w-80 max-h-64 overflow-y-auto border border-gray-200 dark:border-gray-700">
+            <div class="flex items-center justify-between mb-3">
+                <h3 class="text-sm font-semibold text-gray-800 dark:text-gray-200 flex items-center">
+                    <svg class="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clip-rule="evenodd" />
+                    </svg>
+                    Uploads ({{ uploadQueue.length }})
+                </h3>
+                <button @click="showUploadModal = false; uploadQueue = []; Object.keys(uploadProgress).forEach(key => delete uploadProgress[key])" 
+                        class="text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300">
+                    <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+                    </svg>
+                </button>
+            </div>
+            
+            <!-- Upload Queue Items -->
+            <div v-for="queueItem in uploadQueue" :key="queueItem.id" class="mb-3 last:mb-0">
+                <div class="flex items-center justify-between mb-1">
+                    <div class="flex items-center space-x-2 flex-1 min-w-0">
+                        <FileTypeIcon :fileName="queueItem.fileName" size="w-4 h-4" className="flex-shrink-0" />
+                        <span class="text-xs font-medium text-gray-700 truncate">{{ queueItem.fileName }}</span>
+                    </div>
+                    <span class="text-xs px-2 py-1 rounded-full ml-2" 
+                          :class="{
+                              'bg-yellow-100 text-yellow-800': queueItem.status === 'pending',
+                              'bg-blue-100 text-blue-800': queueItem.status === 'uploading',
+                              'bg-green-100 text-green-800': queueItem.status === 'completed',
+                              'bg-red-100 text-red-800': queueItem.status === 'failed'
+                          }">
+                        {{ queueItem.status }}
+                    </span>
+                </div>
+                
+                <!-- Progress bar for uploading files -->
+                <div v-if="queueItem.status === 'uploading' && queueItem.progress !== undefined" 
+                     class="w-full bg-gray-200 rounded-full h-2">
+                    <div class="bg-blue-600 h-2 rounded-full transition-all duration-300" 
+                         :style="{ width: queueItem.progress + '%' }">
+                    </div>
+                    <div class="text-xs text-gray-500 mt-1">
+                        {{ Math.round(queueItem.progress) }}%
+                    </div>
+                </div>
+                
+                <!-- Simple progress indicator for pending -->
+                <div v-else-if="queueItem.status === 'pending'" class="w-full bg-gray-200 rounded-full h-2">
+                    <div class="bg-yellow-400 h-2 rounded-full w-0"></div>
+                </div>
+                
+                <!-- Completed indicator -->
+                <div v-else-if="queueItem.status === 'completed'" class="w-full bg-green-200 rounded-full h-2">
+                    <div class="bg-green-600 h-2 rounded-full w-full"></div>
+                </div>
+                
+                <!-- Failed indicator -->
+                <div v-else-if="queueItem.status === 'failed'" class="w-full bg-red-200 rounded-full h-2">
+                    <div class="bg-red-600 h-2 rounded-full w-full"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Encryption Key Modal -->
+        <EncryptionKeyModal
+            :show="showEncryptionKeyModal"
+            :fileName="pendingDownload?.name"
+            v-model:encryptionKey="encryptionKey"
+            @submit="handleEncryptionKeySubmit"
+            @cancel="cancelEncryptionKeyModal"
+        />
+
+        <!-- Share Modal -->
+        <ShareModal
+            :show="showShareModal"
+            :fileName="shareItem?.name"
+            :fileId="shareItem?.id"
+            @cancel="closeShareModal"
+        />
+
+        <!-- Upload Config Modal for Drag and Drop -->
+        <UploadConfigModal
+            :show="showDragUploadModal"
+            :encryptionKey="dragEncryptionKey"
+            @submit="handleDragUploadSubmit"
+            @cancel="handleDragUploadCancel"
+            @update:encryptionKey="dragEncryptionKey = $event"
+        />
     </div>
 </template>
